@@ -1,4 +1,7 @@
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 
 from boto3.s3.transfer import TransferConfig
 from boto3.exceptions import S3TransferFailedError
@@ -38,9 +41,17 @@ def main():
     client = s3_client()
     REPORTS.mkdir(parents=True, exist_ok=True)
     counts = {"downloaded": 0, "skipped": 0, "failed": 0}
-    with (REPORTS / "download_failed.txt").open("w", encoding="utf-8") as failures:
-        for index, row in enumerate(manifest_rows(), 1):
-            result = download_one(client, row)
+    with (REPORTS / "download_failed.txt").open("w", encoding="utf-8") as failures, ThreadPoolExecutor(max_workers=32) as executor:
+        rows = iter(manifest_rows())
+        pending = deque((row, executor.submit(download_one, client, row)) for row in islice(rows, 32))
+        index = 0
+        while pending:
+            row, future = pending.popleft()
+            result = future.result()
+            next_row = next(rows, None)
+            if next_row is not None:
+                pending.append((next_row, executor.submit(download_one, client, next_row)))
+            index += 1
             counts[result] += 1
             if result == "failed":
                 failures.write(row["key"] + "\n")
