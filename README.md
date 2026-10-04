@@ -4,6 +4,16 @@ Current progress:
 1. Download data from OpenAQ: AWS S3 -> manifest -> full local raw archive -> file validation -> schema inspection
 2. EDA, cleaning, Spark, Kafka, HDFS, analytics and visualization (ongoing)
 
+## Update
+
+1. Crawl:
+- `build_manifest.py` now accepts both month partitions `1`–`9` and `01`–`09`, as well as `10`–`12`. Downloads preserve the original month spelling instead of renaming directories.
+- `download_data.py` now allows 32 threads
+- To further increase the speed of crawling, we utilize Kaggle to run parallel sessions:
+  + The Python files for crawling are uploaded as a dataset, and added as an input dataset to the 2 notebooks below
+  + First notebook: `prepare_shard.ipynb` to divide the `data/metadata/archive_manifest.csv` into 30 parts (shards)
+  + Second notebook: `kaggle_crawl.ipynb` to download data from corresponding shard (for each session, shard_id must be changed to a value in 1-30)
+
 ## Setup and run
 
 - Run in order: 
