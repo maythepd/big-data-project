@@ -3,12 +3,12 @@
 Note: WAQI publishes pollutants as US AQI sub-indices (pm25: 57 means AQI 57,
 not 57 µg/m³), so they are sent as aqi_pm25, aqi_no2, ... with unit "us_aqi".
 
-Run from the project root:  python -m ingestion.waqi.producer [--once] [--dry-run]
+Run from the project root:  python -m src.ingestion.waqi.producer [--once] [--dry-run]
 """
 import pandas as pd
-from ingestion.common.base_producer import BaseProducer
-from ingestion.common.config import DIM_DIR, require_env
-from ingestion.common.schema import make_message
+from src.ingestion.base_producer import BaseProducer
+from src.common.config import DIM_DIR, require_env
+from src.common.schema import make_message
 
 POLLUTANTS = {"pm25", "pm10", "no2", "o3", "so2", "co"}
 WEATHER_UNITS = {"t": "c", "h": "%"}       # temperature, relative humidity

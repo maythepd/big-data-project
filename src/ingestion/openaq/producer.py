@@ -1,11 +1,11 @@
 """OpenAQ -> Kafka. One request per station returns all of its sensors.
 
-Run from the project root:  python -m ingestion.openaq.producer [--once] [--dry-run]
+Run from the project root:  python -m src.ingestion.openaq.producer [--once] [--dry-run]
 """
 import pandas as pd
-from ingestion.common.base_producer import BaseProducer
-from ingestion.common.config import DIM_DIR, require_env
-from ingestion.common.schema import make_message
+from src.ingestion.base_producer import BaseProducer
+from src.common.config import DIM_DIR, require_env
+from src.common.schema import make_message
 
 
 class OpenAQProducer(BaseProducer):

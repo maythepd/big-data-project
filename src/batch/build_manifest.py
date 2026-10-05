@@ -3,7 +3,7 @@ import time
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from utils import BUCKET, KEY_PATTERN, MANIFEST, PREFIX, REPORTS, s3_client
+from src.batch.utils import BUCKET, KEY_PATTERN, MANIFEST, PREFIX, REPORTS, s3_client
 
 
 def main():

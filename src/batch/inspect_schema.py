@@ -3,7 +3,7 @@ import gzip
 import json
 import zlib
 
-from utils import REPORTS, local_path
+from src.batch.utils import REPORTS, local_path
 
 
 def main():

@@ -2,7 +2,7 @@ import csv
 import gzip
 import zlib
 
-from utils import REPORTS, local_path, manifest_rows
+from src.batch.utils import REPORTS, local_path, manifest_rows
 
 
 def validate(row):

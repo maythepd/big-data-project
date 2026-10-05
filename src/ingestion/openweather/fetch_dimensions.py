@@ -7,12 +7,12 @@ Run once (takes a few minutes: one request per grid point); rerun only to change
 
 Writes: data/dim/openweather_stations.parquet
 
-    python -m ingestion.openweather.fetch_dimensions [--step 0.5]
+    python -m src.ingestion.openweather.fetch_dimensions [--step 0.5]
 """
 import argparse, os
 import pandas as pd
-from ingestion.common.base_producer import RateLimiter
-from ingestion.common.config import DIM_DIR, VIETNAM_BBOX, require_env
+from src.ingestion.base_producer import RateLimiter
+from src.common.config import DIM_DIR, VIETNAM_BBOX, require_env
 
 API_KEY = require_env("OPENWEATHER_API_KEY")
 

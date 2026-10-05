@@ -1,11 +1,11 @@
 """OpenWeather Air Pollution -> Kafka. One request per grid point returns all pollutants.
 
-Run from the project root:  python -m ingestion.openweather.producer [--once] [--dry-run]
+Run from the project root:  python -m src.ingestion.openweather.producer [--once] [--dry-run]
 """
 import pandas as pd
-from ingestion.common.base_producer import BaseProducer
-from ingestion.common.config import DIM_DIR, require_env
-from ingestion.common.schema import make_message
+from src.ingestion.base_producer import BaseProducer
+from src.common.config import DIM_DIR, require_env
+from src.common.schema import make_message
 
 
 def parse_air_pollution(body, station):

@@ -2,7 +2,7 @@ import csv
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data/raw"
 REPORTS = ROOT / "data/reports"
 MANIFEST = ROOT / "data/metadata/archive_manifest.csv"

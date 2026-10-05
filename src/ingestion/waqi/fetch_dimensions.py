@@ -8,12 +8,12 @@ aqicn.org/station/@476182, so the url alone is not enough).
 
 Writes: data/dim/waqi_stations.parquet
 
-    python -m ingestion.waqi.fetch_dimensions
+    python -m src.ingestion.waqi.fetch_dimensions
 """
 import os
 import pandas as pd
-from ingestion.common.base_producer import RateLimiter
-from ingestion.common.config import DIM_DIR, VIETNAM_BBOX, require_env
+from src.ingestion.base_producer import RateLimiter
+from src.common.config import DIM_DIR, VIETNAM_BBOX, require_env
 
 TOKEN = require_env("WAQI_TOKEN")
 TILE = 1.0                                         # degrees

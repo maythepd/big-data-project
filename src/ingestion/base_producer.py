@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 from kafka import KafkaProducer
 from kafka.serializer import DefaultSerializer, JsonSerializer
-from .config import KAFKA_BOOTSTRAP_SERVERS, TOPIC_NAME
+from src.common.config import KAFKA_BOOTSTRAP_SERVERS, TOPIC_NAME
 
 
 class RateLimiter:

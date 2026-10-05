@@ -7,8 +7,8 @@ Writes:
 import os
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from ingestion.common.base_producer import RateLimiter
-from ingestion.common.config import DIM_DIR, require_env
+from src.ingestion.base_producer import RateLimiter
+from src.common.config import DIM_DIR, require_env
 
 HEADERS = {"X-API-Key": require_env("OPENAQ_API_KEY")}
 BASE = "https://api.openaq.org/v3/locations"

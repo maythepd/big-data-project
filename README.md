@@ -16,12 +16,12 @@ Current progress:
 
 ## Setup and run
 
-- Run in order: 
+- Run in order, from the project root (scripts live in `src/batch/`): 
 1. Install (if necessary) from requirements.txt
-2. build_manifest.py: write `data/metadata/archive_manifest.csv`
-3. download_data.py: download every entry to `data/raw/locationid=.../year=.../month=.../`, failures go to `data/reports/download_failed.txt`
-4. validate_raw.py: write `data/reports/raw_validation.csv`
-5. inspect_schema.py: write `data/reports/schema_report.csv` and `schema_errors.csv`
+2. `python -m src.batch.build_manifest`: write `data/metadata/archive_manifest.csv`
+3. `python -m src.batch.download_data`: download every entry to `data/raw/locationid=.../year=.../month=.../`, failures go to `data/reports/download_failed.txt`
+4. `python -m src.batch.validate_raw`: write `data/reports/raw_validation.csv`
+5. `python -m src.batch.inspect_schema`: write `data/reports/schema_report.csv` and `schema_errors.csv`
 
 ## Scripts and outputs
 
@@ -40,15 +40,15 @@ Source: [OpenAQ archive documentation](https://docs.openaq.org/aws/about).
 ## Phase 1: Data stream
 - First, regulate which area to fetch data from, i.e giving locations and sensors that we will fetch data from:
 ```
-python -m ingestion.openaq.fetch_dimensions      
-python -m ingestion.waqi.fetch_dimensions         
-python -m ingestion.openweather.fetch_dimensions   
+python -m src.ingestion.openaq.fetch_dimensions      
+python -m src.ingestion.waqi.fetch_dimensions         
+python -m src.ingestion.openweather.fetch_dimensions   
 ```
 this will return a table inside a parquet file signaling where to call API (most are api/{locationid})
 - Second, forming the data stream:
 ```
-python -m ingestion.openaq.producer
-python -m ingestion.waqi.producer
-python -m ingestion.openweather.producer
+python -m src.ingestion.openaq.producer
+python -m src.ingestion.waqi.producer
+python -m src.ingestion.openweather.producer
 ```
 each make an API request using a key, then format them into 1 uniform format to process

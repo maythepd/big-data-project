@@ -7,7 +7,7 @@ from boto3.s3.transfer import TransferConfig
 from boto3.exceptions import S3TransferFailedError
 from botocore.exceptions import BotoCoreError, ClientError
 
-from utils import BUCKET, REPORTS, local_path, manifest_rows, s3_client
+from src.batch.utils import BUCKET, REPORTS, local_path, manifest_rows, s3_client
 
 
 def download_one(client, row):

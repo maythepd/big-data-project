@@ -25,6 +25,11 @@ UNITS = {
     "aqi_o3": "us_aqi", "aqi_so2": "us_aqi", "aqi_co": "us_aqi",
 }
 
+# When several sources measure the same place, hour and parameter, the lowest number wins:
+# OpenAQ is the standard; WAQI (real stations) fills its gaps; OpenWeather (model) fills the rest
+# and covers locations no station reaches. Used when merging in the processing layer.
+SOURCE_PRIORITY = {"openaq": 1, "waqi": 2, "openweather": 3}
+
 # g/mol, for converting gas concentrations from ppm/ppb to µg/m³ (at 25 °C, 1 atm)
 MOLECULAR_WEIGHT = {"no": 30.01, "no2": 46.01, "o3": 48.00, "so2": 64.07, "co": 28.01, "nh3": 17.03}
 
