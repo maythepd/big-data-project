@@ -1,0 +1,13 @@
+# secrets
+.env
+
+# generated data
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# os
+.DS_Store
