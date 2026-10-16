@@ -2,7 +2,8 @@
 
 Current progress:
 1. Download data from OpenAQ: AWS S3 -> manifest -> full local raw archive -> file validation -> schema inspection
-2. EDA, cleaning, Spark, Kafka, HDFS, analytics and visualization (ongoing)
+2. Upload files to HDFS
+3. EDA, cleaning, Spark, Kafka, analytics and visualization (ongoing)
 
 ## Update
 
