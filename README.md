@@ -14,6 +14,8 @@ Current progress:
   + The Python files for crawling are uploaded as a dataset, and added as an input dataset to the 2 notebooks below
   + First notebook: `prepare_shard.ipynb` to divide the `data/metadata/archive_manifest.csv` into 30 parts (shards)
   + Second notebook: `kaggle_crawl.ipynb` to download data from corresponding shard (for each session, shard_id must be changed to a value in 1-30)
+2.  Upload HDFS:
+- Require Hadoop 3.4.3, WSL2, Ubuntu, Java 11
 
 ## Setup and run
 
@@ -23,6 +25,11 @@ Current progress:
 3. `python -m src.batch.download_data`: download every entry to `data/raw/locationid=.../year=.../month=.../`, failures go to `data/reports/download_failed.txt`
 4. `python -m src.batch.validate_raw`: write `data/reports/raw_validation.csv`
 5. `python -m src.batch.inspect_schema`: write `data/reports/schema_report.csv` and `schema_errors.csv`
+6. Start HDFS in WSL:
+   - `sudo service ssh start`
+   - `start-dfs.sh`
+   - verify with `jps` and `hdfs dfsadmin -report`
+7. `python src/batch/stage_to_hdfs.py`: upload all validated raw files to `/openaq/bronze/` in HDFS while preserving the OpenAQ partition structure
 
 ## Scripts and outputs
 
@@ -31,11 +38,13 @@ Current progress:
 - `validate_raw.py`: checks every manifest entry, reads gzip to EOF (including CRC/trailer checks), then checks that a UTF-8 CSV header exists and has no empty column names. Writes `data/reports/raw_validation.csv` atomically. Blank integrity flags mean not checked. It does not validate data-row semantics or modify raw files.
 - `inspect_schema.py`: reads headers only from entries that passed all validation checks. Groups exact column names and order, writing `data/reports/schema_report.csv` and `schema_errors.csv`. Columns are stored as a JSON array. IDs follow first occurrence. Invalid raw files are excluded and counted.
 - `utils.py`: shares project paths, unsigned S3 configuration and safe key-to-path checks across the four scripts.
+- `stage_to_hdfs.py`: reads `data/reports/raw_validation.csv` and uploads only valid files to HDFS under `/openaq/bronze/`, preserving paths such as `locationid=.../year=.../month=.../` and provider/country partitions. Existing HDFS files with the expected size are skipped, so rerunning resumes safely. Files with conflicting sizes or failed uploads are written to `data/reports/hdfs_stage_failed.csv`. The script supports `--limit N` and `--hdfs-root PATH` for test uploads before a full run.
 
 Downloads/validation/schema inspection return a nonzero exit code for detected failures. Fix reported problems and rerun validation before inspecting schemas. A corrupt file with the correct size will be skipped by download; manually move it aside before downloading again. Validation never deletes it.
 
+Before running `stage_to_hdfs.py`, HDFS must be started and at least one DataNode must be live. Do not reformat the NameNode after HDFS contains data.
+
 Source: [OpenAQ archive documentation](https://docs.openaq.org/aws/about).
-#Big data project
 
 # Vietnamese Air Quality Big data
 ## Phase 1: Data stream
