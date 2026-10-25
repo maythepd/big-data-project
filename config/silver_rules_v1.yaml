@@ -1,0 +1,144 @@
+# Silver cleaning parameters. values/units checks (reports/values_units_full_01) measured the impact of
+# every entry; rule finalization fixed them with that evidence (SILVER_PLAN.md §7-8, EDA_FINDINGS.md).
+# Read by: src/eda/check_values_units.py (impact), src/silver/* (build).
+version: v1
+status: final            # finalized 25/10/2026 (rule finalization)
+
+normalization:
+  # Applied after trim + lower-case on units.
+  units_aliases:
+    "μg/m³": "µg/m³"     # U+03BC (Greek mu) -> U+00B5 (micro sign)
+    "ugm3": "µg/m³"
+    "mb": "hpa"
+  # Applied after trim + lower-case on parameter.
+  parameter_aliases:
+    humidity: relativehumidity
+    ozone: o3             # Values/units checks: values are ppm despite units "ppb" -> R06b relabel_ppm
+    pm25-old: pm25        # 1,824 rows; values/units checks checks overlap with pm25 of the same sensor
+
+# Canonical unit per parameter after conversion.
+canonical_units:
+  pm1: "µg/m³"
+  pm25: "µg/m³"
+  pm4: "µg/m³"
+  pm10: "µg/m³"
+  bc: "µg/m³"
+  o3: ppm
+  no2: ppm
+  so2: ppm
+  co: ppm
+  "no": ppm
+  nox: ppm
+  co2: ppm
+  ch4: ppm
+  temperature: c
+  relativehumidity: "%"
+  pressure: hpa
+  wind_speed: m/s
+  wind_direction: deg
+  voc: iaq
+  um003: particles/cm³
+  um005: particles/cm³
+  um010: particles/cm³
+  um025: particles/cm³
+  um050: particles/cm³
+  um100: particles/cm³
+  ufp: particles/cm³
+
+# Gas conversions at 25 °C and 1 atm: ppm = µg/m³ * molar_volume / (MW * 1000).
+molar_volume_l: 24.45
+molecular_weight:
+  o3: 48.00
+  no2: 46.01
+  so2: 64.07
+  co: 28.01
+  "no": 30.01
+# NOx has no single molecular weight: µg/m³ values are NOT converted (kept, flagged unit_unconverted).
+no_mass_conversion: [nox]
+
+# R04: measurements before this or after the build time are invalid.
+time_range:
+  min_utc: "2000-01-01T00:00:00Z"
+
+# (parameter, units) pairs that cannot be valid measurements.
+invalid_pairs:
+  - [pm25, ppm]           # 414 rows
+
+# Exact values treated as sentinels (value -> null, dq flag "sentinel").
+# Values/units checks (flagged_top_values, full): -999 7.9M rows, 9999 3.9M, -9999 1.5M, -995 1.4M,
+# -998 0.37M, -1000 0.71M (co µg/m³), -1111 0.23M, -999.9, -99.99, 99999.01: each in >= 3
+# (parameter, units) groups. Values like 42949472 (pressure mb) and -132.6 (temperature)
+# are already outside the hard bounds.
+sentinels: [-9999, -1111, -1000, -999.9, -999, -998, -995, -99.99, 9999, 65535, 99999.01,
+            4294967295, 42949672.95]
+# |value| at or above this is treated as a sentinel/garbage value.
+extreme_abs: 1.0e9
+
+# Hard physical bounds in the canonical unit: outside -> invalid.
+# negative_small_min: values in [negative_small_min, 0) are kept as "negative_small" (suspect).
+bounds:
+  pm1:              {min: -10,   max: 1500,  negative_small_min: -10}
+  pm25:             {min: -10,   max: 1500,  negative_small_min: -10}
+  pm4:              {min: -10,   max: 1500,  negative_small_min: -10}
+  pm10:             {min: -10,   max: 5000,  negative_small_min: -10}
+  bc:               {min: -20,   max: 200,   negative_small_min: -20}
+  o3:               {min: -0.01, max: 2,     negative_small_min: -0.01}
+  no2:              {min: -0.01, max: 2,     negative_small_min: -0.01}
+  so2:              {min: -0.01, max: 2,     negative_small_min: -0.01}
+  "no":               {min: -0.01, max: 5,     negative_small_min: -0.01}
+  nox:              {min: -0.01, max: 5,     negative_small_min: -0.01}
+  co:               {min: -0.5,  max: 100,   negative_small_min: -0.5}
+  co2:              {min: 250,   max: 10000}
+  ch4:              {min: 0,     max: 100}
+  temperature:      {min: -90,   max: 60}
+  relativehumidity: {min: 0,     max: 105}
+  pressure:         {min: 300,   max: 1100}
+  wind_speed:       {min: 0,     max: 75}
+  wind_direction:   {min: 0,     max: 360}
+  voc:              {min: 0,     max: 500}
+  um003:            {min: 0,     max: 65534}
+  um005:            {min: 0,     max: 65534}
+  um010:            {min: 0,     max: 65534}
+  um025:            {min: 0,     max: 65534}
+  um050:            {min: 0,     max: 65534}
+  um100:            {min: 0,     max: 65534}
+  ufp:              {min: 0,     max: 1000000}
+
+# Histogram resolution (decimals) per canonical unit, used for deterministic
+# quantiles in Values/units checks: 0.1 µg/m³, 0.0001 ppm (0.1 ppb), 0.1 °C ...
+histogram_decimals:
+  default: 2
+  "µg/m³": 1
+  ppm: 4
+  c: 1
+  "%": 1
+  hpa: 1
+  m/s: 2
+  deg: 0
+  iaq: 0
+  particles/cm³: 0
+
+# Per-sensor unit sanity: sensor median vs global median of the same canonical group.
+unit_check:
+  ratio_suspect: 100      # >= 100x or <= 1/100 -> unit_suspect
+  temperature_c_median_max: 45   # a "c" sensor with median above this is likely °F
+
+# R06b per-sensor unit decisions (src/silver/build_sensor_units.py -> silver/dim_sensor_unit).
+# Values/units checks (full): co/ppb 630 of 661 sensors and nox/ppb 570 of 859 sit ~1000x below the
+# group after /1000 (values already ppm); 10,841 of 19,458 temperature/c sensors have a
+# median > 45 (°F values).
+unit_relabel:
+  ppb_as_ppm_max_ratio: 0.01           # median/group <= this after /1000 -> relabel_ppm
+  c_as_f_converted_median: [-40, 45]   # relabel_f only if the °F->°C median is plausible
+
+# Soft outliers (flag only, never drop). NOT applied in Silver v1 (build without
+# --soft-outliers): on the sample months flatline (>= 24 equal rows) hit 15.5% of
+# temperature, 11% of RH and 9.1% of o3 rows because 24 rows of a 1-minute sensor are
+# 24 minutes; spikes were rare (pm25 611, pm10 276 rows). pm25 > pm10 in 0.59% of
+# location-hours. Left to Gold / analysis with a time-based run length.
+soft_outliers:
+  sample_months: ["2019-01", "2023-10", "2026-01"]   # values/units checks estimate rates on these
+  flatline_min_run: 24
+  spike_ratio: 10
+  spike_min_value: {pm25: 100, pm10: 200}
+  pm25_gt_pm10_tolerance: {ratio: 1.1, abs: 5}

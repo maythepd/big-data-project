@@ -32,14 +32,18 @@ OpenAQ / WAQI / OpenWeather APIs                                                
 | Uploading raw files to HDFS (`stage_to_hdfs.py`) | Done |
 | Station catalogs and producers for OpenAQ, WAQI and OpenWeather | Done |
 | Producers count a reading as sent only after Kafka confirms it | Written; logic tested locally |
-| Simulated HDFS cluster in Docker: 1 NameNode and 4 DataNodes, 3 copies of every block | Written; not yet run |
-| Kafka cluster in Docker: 3 brokers, 3 copies of every message | Written; not yet run |
-| Spark streaming consumer: stream archive in HDFS and `latest_readings` in PostgreSQL | Written; parsing and the PostgreSQL upsert tested locally |
+| Simulated HDFS cluster in Docker: 1 NameNode and 4 DataNodes, 3 copies of every block | Running in local OpenAQ pilot; fault-injection drills pending |
+| Kafka cluster in Docker: 3 brokers, 3 copies of every message | Running in local OpenAQ pilot |
+| Spark streaming consumer: stream archive in HDFS and `latest_readings` in PostgreSQL | Local OpenAQ API → Kafka → Spark → HDFS/PostgreSQL verified |
+| OpenAQ Silver streaming with historical v1 rules | Implemented; real pilot validated 25/10/2026: 23 valid measurements, 43 legacy messages quarantined, 15 duplicates removed; 0 duplicate keys |
 | PostgreSQL serving database | Written; schema and upsert tested locally |
 | Silver job combining history and stream | Written; cleaning and merge logic tested locally, not yet run on real data |
 | Gold daily table for the timeline, dashboard | To be built ([see below](#to-be-built)) |
 
-"Tested locally" means the logic ran against PySpark 3.5.9 and PostgreSQL 17.6 with sample data. The Docker stacks have not yet been started together end to end.
+"Tested locally" refers to PySpark 3.5.9 and PostgreSQL 17.6. The OpenAQ Docker
+pipeline has now run end to end; streaming Silver also has fixtures for replay,
+late data, malformed input, conflicts and atomic failure/retry. Other API
+sources and physical HDFS integration still require end-to-end validation.
 
 ## Repository layout
 
@@ -185,13 +189,18 @@ Source: [OpenAQ archive documentation](https://docs.openaq.org/aws/about).
 Each source has a `fetch_dimensions.py`, which builds its station catalog in `data/dim/`, and a `producer.py`, which polls the API and sends readings to the Kafka topic `air-quality`.
 
 - OpenAQ polls every 10 minutes, WAQI every 15 and OpenWeather every 60. Stations themselves report about hourly.
-- Every reading is translated by `schema.make_message` into one shared format, one message per measurement:
+- OpenAQ uses `schema.make_openaq_message` (v2): sensor/location IDs and the raw
+  parameter, value, unit and timestamp are preserved for Silver cleaning.
+  WAQI/OpenWeather continue to use `schema.make_message`. The original common fields are:
   ```
   {"source": "openaq", "station_id": "openaq-4946812", "lat": 21.0, "lon": 105.8,
    "parameter": "pm25", "value": 23.4, "unit": "µg/m³",
    "datetime": "2026-10-04T10:00:00Z", "ingested_at": "2026-10-04T10:05:12Z"}
   ```
-  Gas concentrations in ppm/ppb are converted to µg/m³. WAQI publishes pollutants as US AQI sub-indices rather than concentrations, so they are kept as separate parameters (`aqi_pm25`, `aqi_no2`, ...) with unit `us_aqi`.
+  OpenAQ conversion now happens in Silver (canonical gas unit ppm). The older
+  helper used by the other producers converts gases to µg/m³. WAQI publishes
+  pollutants as US AQI sub-indices rather than concentrations, so they are kept
+  as separate parameters (`aqi_pm25`, `aqi_no2`, ...) with unit `us_aqi`.
 - Messages are keyed by `station_id`, so each station's readings stay in order within one partition.
 - Readings older than 1 day, and readings already sent, are skipped. A reading is only recorded as sent after Kafka confirms the write (`acks="all"`). Failed sends are logged as `N readings failed to send, retrying next cycle` and sent again in the next cycle, so a reading can occasionally arrive twice. Consumers deduplicate.
 
@@ -203,14 +212,26 @@ Each source has a `fetch_dimensions.py`, which builds its station catalog in `da
 
 ### Streaming consumer (`src/streaming/consumer.py`)
 
-A Spark Structured Streaming job in the `spark-consumer` container, which joins the Kafka, HDFS and PostgreSQL networks. It writes two outputs:
+A Spark Structured Streaming job in the `spark-consumer` container, which joins the Kafka, HDFS and PostgreSQL networks. It writes three outputs:
 
 - **Stream archive:** every 5 minutes, new readings are deduplicated on `(station_id, parameter, event_time)` and appended to `/openaq/stream/readings/` as Parquet. The checkpoint at `/openaq/checkpoints/stream_readings` records how far the archive has read, so a restart continues without gaps or duplicates. Readings more than 25 hours older than the newest one seen, or stamped more than 1 hour in the future, are dropped. If the consumer is stopped for longer than Kafka's 7-day retention, the archive query fails on start instead of silently skipping the lost messages. The archive writes small files (at most one per date every 5 minutes); Silver rewrites them into one file per month.
 - **`latest_readings`:** every minute, the newest reading per station and parameter is upserted into PostgreSQL. A row is only replaced by a reading with a later `event_time`, so replays and late batches never overwrite newer data. Its checkpoint is `/openaq/checkpoints/latest_readings`.
+- **OpenAQ Silver:** sensor-level measurements cleaned with historical v1 rules,
+  plus all raw Kafka payloads, quarantine and per-batch reports at
+  `/openaq/silver/stream/v1/batches/`. Independent checkpoint:
+  `/openaq/checkpoints/silver_stream_v1`. See [the streaming guide](src/streaming/README.md).
 
 Spark runs with 1 shuffle partition, which suits a few thousand readings an hour. The archive checkpoint fixes this number at the first run; changing it later means deleting `/openaq/checkpoints/stream_readings`.
 
 ### Silver (`src/batch/build_silver.py`)
+
+**Incremental OpenAQ Silver is now implemented separately in
+`src/streaming/silver_batch_writer.py`, started by the streaming consumer.** It uses the
+validated historical v1 rules and sensor-level keys, with separate raw,
+quarantine, checkpoint and per-batch reconciliation. It never rebuilds
+historical Silver. See [streaming setup, contract, validation and limitations](src/streaming/README.md).
+The batch merger described below is the earlier Near-Silver-based pipeline;
+adapting it to read both completed Silver datasets is a separate step.
 
 Combines Near-Silver and the stream archive into one cleaned table at `/openaq/silver/readings/year=YYYY/month=M/`, one Parquet file per month, sorted by station and time.
 

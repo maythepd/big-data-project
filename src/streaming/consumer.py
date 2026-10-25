@@ -1,4 +1,4 @@
-"""Kafka -> Spark Structured Streaming, with two outputs:
+"""Kafka -> Spark Structured Streaming, with three outputs:
 
 - archive: every reading, deduplicated, appended to HDFS as Parquet partitioned by
   date. This is the permanent copy; Kafka deletes messages after 7 days.
@@ -6,20 +6,26 @@
   minute into the dashboard's PostgreSQL table of the same name
   (docker-compose.serving.yml). Postgres keeps whichever reading is newest, so a
   replayed or late micro-batch never replaces it with an older one.
+- Silver: OpenAQ sensor measurements cleaned with historical v1 rules; raw,
+  quarantine and reconciliation report are published with each atomic batch.
 
 Runs in the spark-consumer container, which reaches Kafka, HDFS and Postgres:
     docker compose -f docker-compose.spark.yml up -d --build
 """
+import os
+
 import psycopg
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 from src.common.config import (KAFKA_BOOTSTRAP_SERVERS, POSTGRES_DB, POSTGRES_HOST,
                                POSTGRES_USER, TOPIC_NAME, require_env)
 
-HDFS = "hdfs://namenode:8020"
+HDFS = os.getenv("HDFS_URI", "hdfs://namenode:8020").rstrip("/")
 ARCHIVE_PATH = f"{HDFS}/openaq/stream/readings"
 ARCHIVE_CHECKPOINT = f"{HDFS}/openaq/checkpoints/stream_readings"
 LATEST_CHECKPOINT = f"{HDFS}/openaq/checkpoints/latest_readings"
+SILVER_ROOT = os.getenv("STREAM_SILVER_ROOT", f"{HDFS}/openaq/silver/stream/v1")
+SILVER_CHECKPOINT = os.getenv("STREAM_SILVER_CHECKPOINT", f"{HDFS}/openaq/checkpoints/silver_stream_v1")
 
 # the fields schema.make_message writes
 MESSAGE_SCHEMA = StructType([
@@ -114,9 +120,28 @@ def start_latest(readings):
             .start())
 
 
+def start_silver(messages):
+    """Replay legacy messages into quarantine; never guess their missing IDs.
+
+    Atomic batch publication makes foreachBatch retries idempotent. Durable
+    key lookup also handles duplicates older than the archive's watermark.
+    """
+    from src.streaming.silver_batch_writer import SilverStreamWriter
+    writer = SilverStreamWriter(messages.sparkSession, SILVER_ROOT,
+        dim_path=os.getenv("STREAM_DIM_LOCATION") or None,
+        sensor_units_path=os.getenv("STREAM_SENSOR_UNITS") or None)
+    return (messages.writeStream.foreachBatch(writer.write_batch)
+            .queryName("openaq-silver-stream")
+            .option("checkpointLocation", SILVER_CHECKPOINT)
+            .trigger(processingTime=os.getenv("STREAM_SILVER_TRIGGER", "1 minute"))
+            .start())
+
+
 def main():
     spark = (SparkSession.builder.appName("air-quality-consumer")
              .config("spark.sql.session.timeZone", "UTC")
+             .config("spark.sql.ansi.enabled", "false")
+             .config("spark.sql.codegen.hugeMethodLimit", "8000")
              # A few thousand readings an hour fit in one state partition, which also
              # keeps it to one Parquet file per date per micro-batch. The archive
              # checkpoint fixes this number at the first run.
@@ -132,6 +157,7 @@ def main():
     readings = parse(messages)
     start_archive(readings)
     start_latest(readings)
+    start_silver(messages)
     spark.streams.awaitAnyTermination()     # a failed query raises and exits
 
 

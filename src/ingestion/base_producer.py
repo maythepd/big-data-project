@@ -48,7 +48,7 @@ class BaseProducer:
         self.log = logging.getLogger(self.source)
         self.api = RateLimiter(self.min_interval)
         self.dry_run = dry_run
-        self.last_seen = {}          # (station_id, parameter) -> datetime of last sent reading
+        self.last_seen = {}          # (source, sensor/station identity, parameter) -> last timestamp
         self.producer = None if dry_run else KafkaProducer(
             bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
             key_serializer=DefaultSerializer(),      # str -> utf-8 bytes
@@ -77,7 +77,7 @@ class BaseProducer:
                 continue
             if datetime.fromisoformat(msg["datetime"].replace("Z", "+00:00")) < cutoff:
                 continue                 # stale reading
-            key = (msg["station_id"], msg["parameter"])
+            key = (msg["source"], msg.get("sensors_id", msg["station_id"]), msg["parameter"])
             sent_datetime = pending[key][0] if key in pending else self.last_seen.get(key)
             if sent_datetime == msg["datetime"]:
                 continue                 # already sent this or last cycle
