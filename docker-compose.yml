@@ -1,58 +1,115 @@
-services:
-  kafka:
-    image: apache/kafka:3.9.0
-    container_name: kafka
-    ports:
-      - "9092:9092"   # for scripts running on your laptop (localhost:9092)
-    environment:
-      # single-node KRaft mode (no Zookeeper)
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      # PLAINTEXT      -> other containers (Spark, kafka-ui) connect via kafka:29092
-      # PLAINTEXT_HOST -> your laptop connects via localhost:9092
-      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      # single broker, so replication factor must be 1
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 3
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      # store messages in a named volume so they survive `docker compose down`
-      # (only `docker compose down -v` deletes them)
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-    volumes:
-      - kafka-data:/var/lib/kafka/data
+# 3-broker Kafka cluster (KRaft, no Zookeeper). Every partition of air-quality is
+# stored on all 3 brokers and a write needs 2 copies (min.insync.replicas=2) before
+# it is acknowledged, so the cluster keeps accepting and serving data when any
+# one broker is down.
+x-kafka: &kafka
+  image: apache/kafka:3.9.0
+  environment: &kafka-env
+    # each node is both a broker and a controller; the 3 controllers vote on
+    # cluster metadata, so losing one still leaves a majority
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    # all nodes format their storage with the same cluster id on first start
+    CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    # PLAINTEXT      -> other containers (Spark, kafka-ui) connect via kafka1:29092,kafka2:29092,kafka3:29092
+    # PLAINTEXT_HOST -> your laptop connects via localhost:9092,localhost:9094,localhost:9096
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    # replication: 3 copies of every topic, writes with acks=all need 2 of them
+    KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+    KAFKA_MIN_INSYNC_REPLICAS: 2
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_NUM_PARTITIONS: 3
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    # store messages in named volumes so they survive `docker compose down`
+    # (only `docker compose down -v` deletes them)
+    KAFKA_LOG_DIRS: /var/lib/kafka/data
+    # the image defaults to a 1 GB heap per broker
+    KAFKA_HEAP_OPTS: -Xmx512m -Xms512m
 
-  # one-shot: creates the topic with 3 partitions, then exits
+services:
+  kafka1:
+    <<: *kafka
+    container_name: kafka1
+    hostname: kafka1
+    ports:
+      - "9092:9092"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:29092,PLAINTEXT_HOST://localhost:9092
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+
+  kafka2:
+    <<: *kafka
+    container_name: kafka2
+    hostname: kafka2
+    ports:
+      - "9094:9094"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:29092,PLAINTEXT_HOST://localhost:9094
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+
+  kafka3:
+    <<: *kafka
+    container_name: kafka3
+    hostname: kafka3
+    ports:
+      - "9096:9096"
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://:29092,PLAINTEXT_HOST://:9096,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:29092,PLAINTEXT_HOST://localhost:9096
+    volumes:
+      - kafka3-data:/var/lib/kafka/data
+
+  # one-shot: creates the topic with 3 partitions x 3 replicas, then exits;
+  # retries until all 3 brokers have joined, since 3 replicas need 3 brokers
   kafka-init:
     image: apache/kafka:3.9.0
     container_name: kafka-init
     depends_on:
-      - kafka
+      - kafka1
+      - kafka2
+      - kafka3
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do sleep 2; done
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists \
-          --topic air-quality --partitions 3 --replication-factor 1
+        until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka1:29092,kafka2:29092,kafka3:29092 \
+          --create --if-not-exists --topic air-quality --partitions 3 --replication-factor 3 \
+          --config min.insync.replicas=2; do sleep 2; done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka1:29092 --describe --topic air-quality
     restart: "no"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     depends_on:
-      - kafka
+      - kafka1
+      - kafka2
+      - kafka3
     ports:
       - "8080:8080"   # browse topics/messages at http://localhost:8080
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:29092,kafka2:29092,kafka3:29092
 
 volumes:
-  kafka-data:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:
+
+networks:
+  default:
+    name: openaq-kafka   # fixed name so docker-compose.spark.yml can join it

@@ -71,25 +71,37 @@ class BaseProducer:
 
     def run_once(self):
         cutoff = datetime.now(timezone.utc) - self.max_age
-        sent = 0
+        pending = {}                     # (station_id, parameter) -> (datetime, send future) this cycle
         for msg in self.fetch():
             if msg is None:
                 continue
             if datetime.fromisoformat(msg["datetime"].replace("Z", "+00:00")) < cutoff:
                 continue                 # stale reading
             key = (msg["station_id"], msg["parameter"])
-            if self.last_seen.get(key) == msg["datetime"]:
-                continue                 # already sent last cycle
-            self.last_seen[key] = msg["datetime"]
+            sent_datetime = pending[key][0] if key in pending else self.last_seen.get(key)
+            if sent_datetime == msg["datetime"]:
+                continue                 # already sent this or last cycle
 
             if self.dry_run:
                 print(json.dumps(msg, ensure_ascii=False))
+                future = None
             else:
-                self.producer.send(TOPIC_NAME, key=msg["station_id"], value=msg)
-            sent += 1
+                future = self.producer.send(TOPIC_NAME, key=msg["station_id"], value=msg)
+            pending[key] = (msg["datetime"], future)
+
         if self.producer:
-            self.producer.flush()
-        self.log.info("cycle done, sent %d new readings", sent)
+            self.producer.flush()        # returns once every send has succeeded or failed
+
+        # only readings Kafka acknowledged count as seen; failed ones are sent again next cycle
+        errors = []
+        for key, (dt, future) in pending.items():
+            if future is None or future.succeeded():
+                self.last_seen[key] = dt
+            else:
+                errors.append(future.exception)
+        if errors:
+            self.log.error("%d readings failed to send, retrying next cycle: %r", len(errors), errors[0])
+        self.log.info("cycle done, sent %d new readings", len(pending) - len(errors))
 
     def run(self, once=False):
         while True:

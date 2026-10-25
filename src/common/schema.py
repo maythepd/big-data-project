@@ -32,6 +32,7 @@ SOURCE_PRIORITY = {"openaq": 1, "waqi": 2, "openweather": 3}
 
 # g/mol, for converting gas concentrations from ppm/ppb to µg/m³ (at 25 °C, 1 atm)
 MOLECULAR_WEIGHT = {"no": 30.01, "no2": 46.01, "o3": 48.00, "so2": 64.07, "co": 28.01, "nh3": 17.03}
+MOLAR_VOLUME = 24.45                 # litres per mole of gas at 25 °C, 1 atm
 
 
 def to_utc_iso(dt):
@@ -53,7 +54,7 @@ def make_message(source, station_id, lat, lon, parameter, value, unit, dt):
         if parameter not in MOLECULAR_WEIGHT:
             return None
         factor = 1000 if unit == "ppm" else 1
-        value = value * MOLECULAR_WEIGHT[parameter] * factor / 24.45
+        value = value * MOLECULAR_WEIGHT[parameter] * factor / MOLAR_VOLUME
     elif unit != UNITS[parameter]:
         return None                      # unexpected unit: drop rather than mislabel
 

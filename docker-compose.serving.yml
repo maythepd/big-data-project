@@ -1,0 +1,28 @@
+# Serving layer: the PostgreSQL database the dashboard reads. The streaming consumer
+# upserts latest_readings here every minute; docker/postgres/init.sql creates the tables.
+# Needs POSTGRES_PASSWORD in .env. From this laptop: localhost:5432, database and
+# user "airquality".
+#   docker compose -f docker-compose.serving.yml up -d
+name: openaq-serving
+
+services:
+  postgres:
+    image: postgres:17.6
+    container_name: postgres
+    environment:
+      POSTGRES_DB: airquality
+      POSTGRES_USER: airquality
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"   # reachable from this laptop only
+    volumes:
+      # `docker compose -f docker-compose.serving.yml down -v` deletes the data
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+volumes:
+  postgres-data:
+
+networks:
+  default:
+    name: openaq-serving   # fixed name so docker-compose.spark.yml can join it

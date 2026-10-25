@@ -5,8 +5,14 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[2]   # project root
 load_dotenv(ROOT / ".env")
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+# all 3 brokers, so producers can start while any one of them is down
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092,localhost:9094,localhost:9096")
 TOPIC_NAME = "air-quality"          # every source writes here, in the same format
+
+# dashboard database (docker-compose.serving.yml); POSTGRES_PASSWORD comes from .env
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_DB = "airquality"
+POSTGRES_USER = "airquality"
 DIM_DIR = ROOT / "data/dim"         # station catalogs written by each fetch_dimensions.py
 
 # (lat_min, lon_min, lat_max, lon_max) around Vietnam; also covers parts of neighbours,

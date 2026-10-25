@@ -1,0 +1,63 @@
+# Spark jobs, run in containers on the HDFS network (and Kafka's and the serving
+# database's, for the consumer). Start Kafka (docker-compose.yml), HDFS
+# (docker-compose.hdfs.yml) and Postgres (docker-compose.serving.yml) first.
+#
+# Streaming consumer (src/streaming/consumer.py), runs continuously:
+#   docker compose -f docker-compose.spark.yml up -d --build
+#   docker logs -f spark-consumer
+# Batch jobs, run on demand, e.g. Silver (src/batch/build_silver.py):
+#   docker compose -f docker-compose.spark.yml run --rm spark-job /opt/spark/bin/spark-submit src/batch/build_silver.py
+name: openaq-spark
+
+x-spark: &spark
+  build: docker/spark
+  image: openaq-spark
+  working_dir: /app
+  environment: &spark-env
+    PYTHONPATH: /app            # lets the scripts import src.common
+    HADOOP_USER_NAME: root      # the HDFS superuser in docker-compose.hdfs.yml
+  volumes:
+    - .:/app
+
+services:
+  spark-consumer:
+    <<: *spark
+    container_name: spark-consumer
+    restart: unless-stopped
+    ports:
+      - "4040:4040"   # Spark UI with a Structured Streaming tab at http://localhost:4040
+    environment:
+      <<: *spark-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
+      POSTGRES_HOST: postgres     # POSTGRES_PASSWORD is read from the mounted .env
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[*]
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.9
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2   # the image's spark user has no home for the default ~/.ivy2
+      - src/streaming/consumer.py
+    networks:
+      - kafka
+      - hdfs
+      - serving
+
+  # one-off batch jobs: `run` starts it with the spark-submit command you give; `up` skips it
+  spark-job:
+    <<: *spark
+    profiles: ["job"]
+    networks:
+      - hdfs
+
+networks:
+  kafka:
+    external: true
+    name: openaq-kafka
+  hdfs:
+    external: true
+    name: openaq-hdfs_default
+  serving:
+    external: true
+    name: openaq-serving

@@ -7,8 +7,9 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
+RAW = ROOT / "data" / "raw"
 VALIDATION = ROOT / "data" / "reports" / "raw_validation.csv"
 FAILED_REPORT = ROOT / "data" / "reports" / "hdfs_stage_failed.csv"
 
@@ -174,6 +175,11 @@ def flush_group(hdfs_dir, rows, failed_writer, counts):
         local_path = to_wsl_path(row["local_path"])
         expected_size = int(row["expected_size"])
         filename = posixpath.basename(key_to_relative(key))
+
+        if not local_path.is_file():
+            # Path recorded on another machine, e.g. the Windows path seen from
+            # the Docker HDFS client: use this checkout's raw archive instead.
+            local_path = RAW / key_to_relative(key)
 
         if not local_path.is_file():
             failed_writer.writerow([key, str(local_path), "local file not found"])

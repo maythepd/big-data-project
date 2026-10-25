@@ -1,6 +1,7 @@
 """Builds the OpenAQ station catalog for Vietnam. Run once, then daily.
 
 Writes:
+    data/dim/openaq_locations.parquet every fixed Vietnam location, including inactive ones (for history)
     data/dim/openaq_stations.parquet  which stations to poll (+ name, coordinates)
     data/dim/openaq_sensors.parquet   sensor_id -> parameter + units (OpenAQ readings only carry a sensor id)
 """
@@ -58,16 +59,19 @@ def main():
     stations = pd.DataFrame(stations)
     sensors = pd.DataFrame(sensors)
 
-    # keep only fixed, recently active stations
-    cutoff = datetime.now(timezone.utc) - ACTIVE_WITHIN
+    # every fixed station, active or not, picks Vietnam out of the global historical
+    # archive (build_silver.py); the producer polls only the recently active ones
     stations["last_seen"] = pd.to_datetime(stations["last_seen"], utc=True)
-    stations = stations[(~stations["is_mobile"]) & (stations["last_seen"] > cutoff)]
+    locations = stations[~stations["is_mobile"]]
+    cutoff = datetime.now(timezone.utc) - ACTIVE_WITHIN
+    stations = locations[locations["last_seen"] > cutoff]
     sensors = sensors[sensors["station_id"].isin(stations["station_id"])]
 
     os.makedirs(DIM_DIR, exist_ok=True)
+    locations.to_parquet(f"{DIM_DIR}/openaq_locations.parquet", index=False)
     stations.to_parquet(f"{DIM_DIR}/openaq_stations.parquet", index=False)
     sensors.to_parquet(f"{DIM_DIR}/openaq_sensors.parquet", index=False)
-    print(f"openaq: {len(stations)} active stations, {len(sensors)} sensors")
+    print(f"openaq: {len(locations)} fixed locations, {len(stations)} active stations, {len(sensors)} sensors")
 
 
 if __name__ == "__main__":
