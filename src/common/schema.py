@@ -69,3 +69,31 @@ def make_message(source, station_id, lat, lon, parameter, value, unit, dt):
         "datetime": to_utc_iso(dt),
         "ingested_at": to_utc_iso(datetime.now(timezone.utc)),
     }
+
+
+def make_openaq_message(location_id, sensors_id, lat, lon, parameter, value, unit, dt,
+                        location_name=None):
+    """Version 2 OpenAQ event: preserve source values; Silver owns conversion.
+
+    Original field names remain readable by archive/latest consumers. Other
+    sources keep make_message until their own Silver adapters are added.
+    """
+    return {
+        "schema_version": 2,
+        "source": "openaq",
+        "station_id": f"openaq-{location_id}",
+        "location_id": int(location_id),
+        "sensors_id": int(sensors_id),
+        "location_name": location_name,
+        "lat": float(lat) if lat is not None else None,
+        "lon": float(lon) if lon is not None else None,
+        "parameter": parameter,
+        "parameter_raw": parameter,
+        "value": value,
+        "value_raw": str(value) if value is not None else None,
+        "unit": unit,
+        "units_raw": unit,
+        "datetime": to_utc_iso(dt),
+        "datetime_local_raw": str(dt),
+        "ingested_at": to_utc_iso(datetime.now(timezone.utc)),
+    }

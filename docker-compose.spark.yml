@@ -30,6 +30,7 @@ services:
       <<: *spark-env
       KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
       POSTGRES_HOST: postgres     # POSTGRES_PASSWORD is read from the mounted .env
+      HDFS_URI: ${HDFS_URI:-hdfs://namenode:8020}
     command:
       - /opt/spark/bin/spark-submit
       - --master

@@ -5,7 +5,7 @@ Run from the project root:  python -m src.ingestion.openaq.producer [--once] [--
 import pandas as pd
 from src.ingestion.base_producer import BaseProducer
 from src.common.config import DIM_DIR, require_env
-from src.common.schema import make_message
+from src.common.schema import make_openaq_message
 
 
 class OpenAQProducer(BaseProducer):
@@ -31,8 +31,9 @@ class OpenAQProducer(BaseProducer):
                 sensor = self.sensors.get(m["sensorsId"])
                 if sensor is None:
                     continue             # sensor added since the last catalog refresh
-                yield make_message(
-                    source=self.source, station_id=st["station_id"],
+                yield make_openaq_message(
+                    location_id=st["station_id"], sensors_id=m["sensorsId"],
+                    location_name=st.get("name"),
                     lat=st["lat"], lon=st["lon"],
                     parameter=sensor["parameter"], value=m["value"], unit=sensor["units"],
                     dt=m["datetime"]["utc"],
