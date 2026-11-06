@@ -1,12 +1,9 @@
-# 3-broker Kafka cluster (KRaft, no Zookeeper). Every partition of air-quality is
-# stored on all 3 brokers and a write needs 2 copies (min.insync.replicas=2) before
-# it is acknowledged, so the cluster keeps accepting and serving data when any
-# one broker is down.
+# Kafka: 3 brokers (KRaft), every partition on all 3, writes need 2 copies,
+# so the cluster keeps working with one broker down.
 x-kafka: &kafka
   image: apache/kafka:3.9.0
   environment: &kafka-env
-    # each node is both a broker and a controller; the 3 controllers vote on
-    # cluster metadata, so losing one still leaves a majority
+    # every node is also a controller: losing one keeps a majority
     KAFKA_PROCESS_ROLES: broker,controller
     KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9093,3@kafka3:9093
     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -25,11 +22,10 @@ x-kafka: &kafka
     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     KAFKA_NUM_PARTITIONS: 3
     KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-    # store messages in named volumes so they survive `docker compose down`
-    # (only `docker compose down -v` deletes them)
+    # named volumes: only `down -v` deletes them
     KAFKA_LOG_DIRS: /var/lib/kafka/data
-    # the image defaults to a 1 GB heap per broker
-    KAFKA_HEAP_OPTS: -Xmx512m -Xms512m
+    # scripts/stack.sh lite lowers the heap
+    KAFKA_HEAP_OPTS: ${OPENAQ_KAFKA_HEAP:--Xmx512m -Xms512m}
 
 services:
   kafka1:
@@ -74,8 +70,7 @@ services:
     volumes:
       - kafka3-data:/var/lib/kafka/data
 
-  # one-shot: creates the topic with 3 partitions x 3 replicas, then exits;
-  # retries until all 3 brokers have joined, since 3 replicas need 3 brokers
+  # one-shot: creates the topic once all 3 brokers are up
   kafka-init:
     image: apache/kafka:3.9.0
     container_name: kafka-init

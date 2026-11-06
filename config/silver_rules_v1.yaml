@@ -1,8 +1,9 @@
 # Silver cleaning parameters. values/units checks (reports/values_units_full_01) measured the impact of
 # every entry; rule finalization fixed them with that evidence (SILVER_PLAN.md §7-8, EDA_FINDINGS.md).
 # Read by: src/eda/check_values_units.py (impact), src/silver/* (build).
-version: v1
-status: final            # finalized 25/10/2026 (rule finalization)
+version: v1.2
+status: final            # v1 finalized 25/10/2026; v1.1 (04/11/2026) adds the temperature c/f pair decisions;
+                         # v1.2 (05/11/2026) adds unpaired temperature channels, gas twin channels, R14 v2
 
 normalization:
   # Applied after trim + lower-case on units.
@@ -130,15 +131,55 @@ unit_check:
 unit_relabel:
   ppb_as_ppm_max_ratio: 0.01           # median/group <= this after /1000 -> relabel_ppm
   c_as_f_converted_median: [-40, 45]   # relabel_f only if the °F->°C median is plausible
+  # v1.1: c and f temperature channels of one device with identical raw values (Silver EDA
+  # sensor pairs). Both directions occur (reports/temperature_units_audit_01): the right
+  # channel is the one closer to the neighbouring locations at the same hours
+  # (src/silver/check_temperature_pairs.py -> reports/temperature_pairs_01).
+  temperature_pair_tolerance_c: 1.0     # |f - (c - 32) * 5/9| below this -> same raw value
+  temperature_pair_min_share: 0.9       # share of pair-hours that must match
+  temperature_pair_neighbour_km: 100    # reference: nearest other locations within this radius
+  temperature_pair_neighbours: 10       # ... at most this many
+  temperature_pair_reference_min_rows: 3000   # reference sensors: long-running only
+  # No reference in range: fallback on the c median, calibrated on the neighbour-checked pairs.
+  temperature_pair_fallback_c_median_min: 35  # short-lived c with median >= -> c carries °F (141/141)
+  temperature_pair_fallback_c_median_max: 25  # long-running c with median <= -> f carries °C (142/144)
+  temperature_pair_margin_c: 3.0        # median error must be lower by this much, else unclear
+  temperature_c_p99_max: 50             # other c sensors with p99 above -> suspect (no air reaches 50 °C)
+  # v1.2: channels in no pair, checked against the same neighbour reference on a sample of their hours
+  temperature_channel_sample_hours: 150
+  temperature_channel_max_err_c: 5.0       # other_unit is relabelled only if the other unit is this close to the neighbours
+  temperature_channel_far_c: 10.0          # as declared but median error above this under both units -> suspect
+  temperature_channel_far_min_hours: 24    #   ... with at least this many reference hours
+  temperature_channel_far_min_neighbours: 3  #   ... and this many neighbour locations
+  # v1.2: the newer channel of a co-located gas pair whose values differ by an exact unit factor
+  # (check_gas_sensor_agreement.py) copies the older channel's raw number under a wrong label
+  gas_twin_factors: [ppb_ugm3, ppm_ppb, ppm_ugm3]
 
-# Soft outliers (flag only, never drop). NOT applied in Silver v1 (build without
-# --soft-outliers): on the sample months flatline (>= 24 equal rows) hit 15.5% of
-# temperature, 11% of RH and 9.1% of o3 rows because 24 rows of a 1-minute sensor are
-# 24 minutes; spikes were rare (pm25 611, pm10 276 rows). pm25 > pm10 in 0.59% of
-# location-hours. Left to Gold / analysis with a time-based run length.
+# Soft outliers (flag only, never drop). R14 v1 was never applied (Silver v1, v1.1): on the
+# sample months flatline (>= 24 equal rows) hit 15.5% of temperature, 11% of RH and 9.1% of o3
+# rows because 24 rows of a 1-minute sensor are 24 minutes. pm25 > pm10 in 0.59% of
+# location-hours. The v1 keys below are only read by check_values_units.py.
 soft_outliers:
   sample_months: ["2019-01", "2023-10", "2026-01"]   # values/units checks estimate rates on these
   flatline_min_run: 24
   spike_ratio: 10
   spike_min_value: {pm25: 100, pm10: 200}
   pm25_gt_pm10_tolerance: {ratio: 1.1, abs: 5}
+  # R14 v2 (Silver v1.2): src/silver/flag_temporal_outliers.py on the built (deduped) Silver,
+  # thresholds from reports/temporal_outliers_01 (EDA_FINDINGS.md, Silver v1.2 step 1).
+  context_hours: 168          # rows of the previous / next month read around each month (= longest run threshold)
+  flatline:
+    parameters: [pm1, pm25, pm4, pm10, bc, o3, no2, so2, "no", nox, co, temperature, relativehumidity]
+    min_hours: 24             # same value held this long (first to last reading of the run)
+    min_readings: 6
+    negative_min_hours: 6     # -1 µg/m³, -0.0005 ppm "no data" codes
+    # Low-resolution gas instruments repeat their last digit in clean air: at or below the
+    # floor (zero included) only a week-long run means a dead sensor.
+    floor: {o3: 0.002, no2: 0.002, so2: 0.002, "no": 0.002, nox: 0.002, co: 0.3}
+    floor_min_hours: 168
+  spike:
+    ratio: 10                 # value >= ratio x reference ...
+    min_diff: {pm1: 500, pm25: 500, pm4: 500, pm10: 1000, o3: 0.5, no2: 0.5, so2: 0.5, "no": 0.5, co: 10,
+               temperature: 15}   # ... and value - reference >= this (canonical unit)
+    diff_only: [temperature]  # |value - reference| >= min_diff, no ratio
+    min_hour_readings: 3      # reading vs its sensor-hour median only with this many readings in the hour

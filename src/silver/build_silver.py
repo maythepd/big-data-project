@@ -1,14 +1,8 @@
-"""Build Silver from near_silver_compact with the rules of src/silver/rules.py.
+"""Build Silver from near_silver_compact with src/silver/rules.py, one month per job.
 
-Per month (idempotent, staging + move): apply R01-R12 (R06b from
-silver/dim_sensor_unit, build_sensor_units.py) and R14, one shuffle by
-sensors_id, dedup R13, write silver/measurements/year=/month= (~128 MB files,
-zstd, sorted by sensor/time) and silver/quarantine/. The `_null_ts` rows get
-their time from the offset repair, so they land in many months: they are
-written last as `nullts-*.parquet` files inside those month folders.
-
-Reconciliation per job: rows_in = silver + quarantine + dedup_removed.
---dry-run computes the same counts (rule finalization impact) without writing data.
+R01-R12, dedup R13, then silver/measurements/year=/month= and silver/quarantine/
+(staging + move). R14 runs afterwards (flag_temporal_outliers.py).
+Reconciliation: rows_in = silver + quarantine + dedup_removed. --dry-run writes nothing.
 """
 
 import argparse
@@ -31,12 +25,9 @@ from src.silver.rules import DEFAULT_RULES, apply_rules, dedup, finalize, load_r
 LAKE = Path.home() / "openaq_lake"
 MB = 1 << 20
 TARGET_FILE = 128 * MB
-# Dedup/rules run on at least this many tasks; output is then reshuffled to the
-# ~128 MB file count. With 1 partition for a 53 MB month the dedup window ran on
-# a single core (2017-03: 228 s for 12.6M rows).
+# minimum tasks for dedup/rules; output is then reshuffled to ~128 MB files
 MIN_COMPUTE_PARTITIONS = 40
-# Rows per task cap, for the spike months (2023-10: 305M rows in 11 output tasks
-# ran out of heap merging sort spills).
+# rows per task cap for very large months
 MAX_ROWS_COMPUTE_TASK = 2_000_000
 MAX_ROWS_OUTPUT_FILE = 10_000_000
 COLUMNS = [
@@ -60,8 +51,8 @@ def offset_minutes():
     return F.when(zulu, 0).when(m != "", sign * (hh * 60 + mm))
 
 
-def silver_frame(df, rules, dim, build_utc, run_id, parts, compute, sensor_units, soft):
-    measured, quarantine = apply_rules(df, rules, dim, build_utc, sensor_units, soft)
+def silver_frame(df, rules, dim, build_utc, run_id, parts, compute, sensor_units):
+    measured, quarantine = apply_rules(df, rules, dim, build_utc, sensor_units)
     measured = measured.repartition(compute, "sensors_id")
     deduped, keep = dedup(measured)
     out = finalize(deduped.filter(keep))
@@ -97,7 +88,6 @@ def main():
     p.add_argument("--months", nargs="*", help="YYYY-MM and/or null_ts (pilot)")
     p.add_argument("--sensor-units", default=str(LAKE / "silver" / "dim_sensor_unit"),
                    help="R06b per-sensor unit decisions (build_sensor_units.py); 'none' to skip")
-    p.add_argument("--soft-outliers", action="store_true", help="compute R14 spike/flatline")
     p.add_argument("--dry-run", action="store_true", help="counts only (rule finalization impact)")
     args = p.parse_args()
 
@@ -111,7 +101,7 @@ def main():
     rules = load_rules(args.rules)
     build_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     meta = {"status": "running", "run_id": args.run_id, "rules_version": rules["version"],
-            "dry_run": args.dry_run, "sensor_units": args.sensor_units, "soft_outliers": args.soft_outliers, "build_utc": build_utc,
+            "dry_run": args.dry_run, "sensor_units": args.sensor_units, "build_utc": build_utc,
             "input": str(source), "output": str(out_root), "months": args.months}
     (report / "run.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -152,7 +142,7 @@ def main():
             compute = max(parts, MIN_COMPUTE_PARTITIONS, math.ceil(rows_in / MAX_ROWS_COMPUTE_TASK))
             start = datetime.now(timezone.utc)
             out, quarantine = silver_frame(part, rules, dim, build_utc, args.run_id, parts, compute,
-                                           sensor_units, args.soft_outliers)
+                                           sensor_units)
             target = staging / key.replace("-", "_")
             if target.exists():
                 shutil.rmtree(target)

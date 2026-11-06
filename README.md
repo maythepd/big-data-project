@@ -5,7 +5,7 @@ A big-data pipeline for air quality in Vietnam. It combines two kinds of data:
 - **History:** the full OpenAQ historical archive on AWS S3, tens of millions of small compressed CSV files, downloaded once and processed in batch.
 - **Live:** current readings from three APIs (OpenAQ, WAQI and OpenWeather), streamed through Kafka every 10–60 minutes.
 
-Both end up in a replicated HDFS cluster, are cleaned into one Silver table, and are served to a dashboard through PostgreSQL. The live map reads the newest readings and the timeline reads history.
+Both end up in a replicated HDFS cluster, are cleaned into one Silver table, and are served to a dashboard through MongoDB. The live map reads the newest readings and the timeline reads history.
 
 ```
 HISTORY (batch)
@@ -14,11 +14,11 @@ OpenAQ S3 archive ─► data/raw (Bronze) ─► validate ─► compact ─►
 LIVE (streaming)                                                                         │
 OpenAQ / WAQI / OpenWeather APIs                                                         │
   └─► producers ─► Kafka (3 brokers) ─► Spark consumer ─┬─► HDFS stream archive ─────────┤
-                                                        └─► PostgreSQL latest_readings   │
+                                                        └─► MongoDB latest_readings      │
                                                                    │                     ▼
                                                                    │      Silver (history + stream, cleaned)
                                                                    │                     │
-                                                                   │      Gold (to be built) ─► PostgreSQL
+                                                                   │      Gold ─► MongoDB (time series)
                                                                    ▼                     ▼
                                                               dashboard: live map + timeline slider
 ```
@@ -34,30 +34,40 @@ OpenAQ / WAQI / OpenWeather APIs                                                
 | Producers count a reading as sent only after Kafka confirms it | Written; logic tested locally |
 | Simulated HDFS cluster in Docker: 1 NameNode and 4 DataNodes, 3 copies of every block | Running in local OpenAQ pilot; fault-injection drills pending |
 | Kafka cluster in Docker: 3 brokers, 3 copies of every message | Running in local OpenAQ pilot |
-| Spark streaming consumer: stream archive in HDFS and `latest_readings` in PostgreSQL | Local OpenAQ API → Kafka → Spark → HDFS/PostgreSQL verified |
-| OpenAQ Silver streaming with historical v1 rules | Implemented; real pilot validated 25/10/2026: 23 valid measurements, 43 legacy messages quarantined, 15 duplicates removed; 0 duplicate keys |
-| PostgreSQL serving database | Written; schema and upsert tested locally |
-| Silver job combining history and stream | Written; cleaning and merge logic tested locally, not yet run on real data |
-| Gold daily table for the timeline, dashboard | To be built ([see below](#to-be-built)) |
+| Spark streaming consumer: stream archive in HDFS and `latest_readings` in MongoDB | Local OpenAQ API → Kafka → Spark → HDFS/MongoDB verified |
+| Consumer queries restart independently; Kafka start offsets configurable | Written; tested with simulated queries |
+| OpenAQ Silver streaming with historical rules | Implemented; running with rules v1.2 |
+| Historical Silver v1.2 (rules R01–R14, `src/silver/`) | Done; 3.1 billion rows, reconciliation exact |
+| Gold v1: station × hour, US EPA and Vietnam AQI, daily tables (`src/gold/`) | Done; validated on all 181 months |
+| MongoDB serving database (replaces PostgreSQL) | Done; global hourly collection loading |
+| Streamlit dashboard (`src/dashboard/`) | Running locally |
+| Lite Docker stack (`scripts/stack.sh`) | Written; not yet measured |
+| WAQI and OpenWeather in Gold | To be built ([see below](#to-be-built)) |
 
-"Tested locally" refers to PySpark 3.5.9 and PostgreSQL 17.6. The OpenAQ Docker
-pipeline has now run end to end; streaming Silver also has fixtures for replay,
-late data, malformed input, conflicts and atomic failure/retry. Other API
-sources and physical HDFS integration still require end-to-end validation.
+"Tested locally" refers to PySpark 3.5.9 and MongoDB 8.0.4. The OpenAQ Docker
+pipeline has run end to end. WAQI/OpenWeather and the team's physical HDFS
+cluster still require end-to-end validation.
 
 ## Repository layout
 
 ```
 docker-compose.yml           Kafka: 3 brokers, topic creation, Kafka UI
 docker-compose.hdfs.yml      HDFS: NameNode, 4 DataNodes and an hdfs-client container
-docker-compose.serving.yml   PostgreSQL for the dashboard
+docker-compose.serving.yml   MongoDB for the dashboard
 docker-compose.spark.yml     Spark: the streaming consumer and one-off batch jobs
-docker/spark/Dockerfile      Spark image with python-dotenv and psycopg
-docker/postgres/init.sql     dashboard tables
+docker/spark/Dockerfile      Spark image with python-dotenv and pymongo
 src/common/                  settings (config.py) and the shared message format (schema.py)
 src/ingestion/<source>/      fetch_dimensions.py (station catalog) and producer.py (API to Kafka)
-src/streaming/consumer.py    Kafka to the HDFS stream archive and PostgreSQL latest_readings
-src/batch/                   historical archive pipeline, HDFS staging and the Silver job
+src/streaming/               Kafka to the HDFS stream archive, MongoDB latest_readings and streaming Silver
+src/batch/                   historical archive pipeline and HDFS staging
+src/block_recovery/          Near-Silver recovered from HDFS DataNode blocks
+src/eda/                     data-quality checks behind the cleaning rules
+src/silver/                  historical Silver job and its rules
+src/gold/                    Gold job: station x hour, AQI and daily tables
+src/serving/                 Gold Parquet to the MongoDB serving collections
+src/dashboard/               Streamlit dashboard
+config/                      Silver and Gold rule parameters
+scripts/stack.sh             starts and stops the Docker stacks in order
 prepare_shard.ipynb          splits the archive manifest into 30 shards for Kaggle
 kaggle_crawl.ipynb           downloads one shard in a Kaggle session
 ```
@@ -72,9 +82,9 @@ kaggle_crawl.ipynb           downloads one shard in a Kaggle session
 | Variable | Used by |
 |---|---|
 | `OPENAQ_API_KEY`, `WAQI_TOKEN`, `OPENWEATHER_API_KEY` | station catalogs and producers |
-| `POSTGRES_PASSWORD` | the PostgreSQL container and the streaming consumer |
+| `MONGO_PASSWORD` | the MongoDB container, the streaming consumer and `load_mongo.py` |
 | `KAFKA_BOOTSTRAP_SERVERS` (optional) | defaults to all 3 brokers, `localhost:9092,localhost:9094,localhost:9096`; leave it unset unless that changes |
-| `POSTGRES_HOST` (optional) | defaults to `localhost` |
+| `MONGO_HOST` (optional) | defaults to `localhost` |
 
 All commands below run from the project root.
 
@@ -97,11 +107,13 @@ All commands below run from the project root.
 
 ### 2. Infrastructure (Docker), in this order
 
+`scripts/stack.sh full` runs the steps below in order, and `scripts/stack.sh lite` starts a smaller set (2 Kafka brokers, NameNode and 2 DataNodes, smaller heaps, no Kafka UI) that fits a 7.6 GB machine. By hand:
+
 1. **Kafka:** `docker compose up -d`. The first time after switching from the old single broker, add `--remove-orphans`.
    - Check: `docker logs kafka-init` shows `ReplicationFactor: 3` for each partition of `air-quality`. Topics can be browsed at http://localhost:8080.
 2. **HDFS:** `docker compose -f docker-compose.hdfs.yml up -d`.
    - Check: `docker compose -f docker-compose.hdfs.yml run --rm hdfs-client hdfs dfsadmin -report` shows `Live datanodes (4)`. The web UI is at http://localhost:9870.
-3. **PostgreSQL:** `docker compose -f docker-compose.serving.yml up -d`. Dashboard tools on this computer connect to `localhost:5432`, with database and user `airquality`.
+3. **MongoDB:** `docker compose -f docker-compose.serving.yml up -d`. Dashboard tools on this computer connect to `localhost:27017`, user `airquality` (authSource `admin`), database `airquality`.
 
 ### 3. Live pipeline
 
@@ -126,7 +138,8 @@ All commands below run from the project root.
    ```
    The Spark UI is at http://localhost:4040. To check the dashboard table:
    ```
-   docker exec postgres psql -U airquality -c "SELECT source, count(*), max(event_time) FROM latest_readings GROUP BY source"
+   docker exec mongo mongosh -u airquality -p "$MONGO_PASSWORD" --quiet airquality --authenticationDatabase admin \
+     --eval 'db.latest_readings.aggregate([{$group: {_id: "$source", n: {$sum: 1}, last: {$max: "$event_time"}}}])'
    ```
 
 ### 4. Silver
@@ -145,7 +158,7 @@ All commands below run from the project root.
 
 ### Stopping
 
-Stop in reverse order:
+`scripts/stack.sh stop`, or in reverse order:
 
 1. `docker compose -f docker-compose.spark.yml down`
 2. Ctrl+C in each producer terminal
@@ -165,8 +178,8 @@ Stop in reverse order:
 | Near-Silver | `data/near_silver/`, HDFS `/openaq/near_silver/` | Historical data compacted and technically normalized: schema variants unified, typed numeric and timestamp columns added, Parquet partitioned by `year/month`. No domain cleaning. |
 | Stream archive | HDFS `/openaq/stream/readings/date=YYYY-MM-DD/` | Every live reading, duplicates removed. The permanent copy of the stream, since Kafka deletes messages after 7 days. |
 | Silver | HDFS `/openaq/silver/readings/year=YYYY/month=M/` | History and stream combined and cleaned, Vietnam only. |
-| Gold | to be built | Aggregates for analytics and the dashboard, such as daily averages per station. |
-| Serving | PostgreSQL `latest_readings` | The newest reading per station and parameter, for the live map. |
+| Gold | `gold/station_hourly`, `station_hourly_aqi`, `station_daily`, `station_daily_aqi` | Hourly and daily averages per station, with US EPA and Vietnam AQI. |
+| Serving | MongoDB `latest_readings` + Gold collections | The newest reading per station and parameter, for the live map; Gold time series for the timeline. |
 
 ### Historical pipeline scripts (`src/batch/`)
 
@@ -212,14 +225,16 @@ Each source has a `fetch_dimensions.py`, which builds its station catalog in `da
 
 ### Streaming consumer (`src/streaming/consumer.py`)
 
-A Spark Structured Streaming job in the `spark-consumer` container, which joins the Kafka, HDFS and PostgreSQL networks. It writes three outputs:
+A Spark Structured Streaming job in the `spark-consumer` container, which joins the Kafka, HDFS and serving (MongoDB) networks. It writes three outputs:
 
 - **Stream archive:** every 5 minutes, new readings are deduplicated on `(station_id, parameter, event_time)` and appended to `/openaq/stream/readings/` as Parquet. The checkpoint at `/openaq/checkpoints/stream_readings` records how far the archive has read, so a restart continues without gaps or duplicates. Readings more than 25 hours older than the newest one seen, or stamped more than 1 hour in the future, are dropped. If the consumer is stopped for longer than Kafka's 7-day retention, the archive query fails on start instead of silently skipping the lost messages. The archive writes small files (at most one per date every 5 minutes); Silver rewrites them into one file per month.
-- **`latest_readings`:** every minute, the newest reading per station and parameter is upserted into PostgreSQL. A row is only replaced by a reading with a later `event_time`, so replays and late batches never overwrite newer data. Its checkpoint is `/openaq/checkpoints/latest_readings`.
+- **`latest_readings`:** every minute, the newest reading per station and parameter is upserted into MongoDB. A document is only replaced by a reading with a later `event_time`, so replays and late batches never overwrite newer data. Its checkpoint is `/openaq/checkpoints/latest_readings`.
 - **OpenAQ Silver:** sensor-level measurements cleaned with historical v1 rules,
   plus all raw Kafka payloads, quarantine and per-batch reports at
   `/openaq/silver/stream/v1/batches/`. Independent checkpoint:
-  `/openaq/checkpoints/silver_stream_v1`. See [the streaming guide](src/streaming/README.md).
+  `/openaq/checkpoints/silver_stream_v1`.
+
+The three outputs run as separate queries. If one fails, it is restarted after a delay while the others keep running. A query with a new checkpoint starts reading Kafka from `STREAM_STARTING_OFFSETS` (`earliest` by default).
 
 Spark runs with 1 shuffle partition, which suits a few thousand readings an hour. The archive checkpoint fixes this number at the first run; changing it later means deleting `/openaq/checkpoints/stream_readings`.
 
@@ -229,7 +244,7 @@ Spark runs with 1 shuffle partition, which suits a few thousand readings an hour
 `src/streaming/silver_batch_writer.py`, started by the streaming consumer.** It uses the
 validated historical v1 rules and sensor-level keys, with separate raw,
 quarantine, checkpoint and per-batch reconciliation. It never rebuilds
-historical Silver. See [streaming setup, contract, validation and limitations](src/streaming/README.md).
+historical Silver.
 The batch merger described below is the earlier Near-Silver-based pipeline;
 adapting it to read both completed Silver datasets is a separate step.
 
@@ -246,9 +261,9 @@ Columns: `source, station_id, lat, lon, parameter, value, unit, event_time, orig
 
 ### Serving database (`docker-compose.serving.yml`)
 
-PostgreSQL 17.6, reachable from this computer only, at `localhost:5432` (database and user `airquality`, password from `.env`). `docker/postgres/init.sql` creates the tables when the data volume is first created; to change an existing database, run the statements by hand or recreate the volume.
+MongoDB 8.0.4, reachable from this computer only, at `localhost:27017` (user `airquality`, authSource `admin`, database `airquality`, password from `.env`). Gold tables are loaded into time series collections by `src/serving/load_mongo.py`.
 
-`latest_readings`: one row per `(station_id, parameter)`, with `source, lat, lon, value, unit, event_time, ingested_at, updated_at`. Times are UTC.
+`latest_readings`: one document per `(station_id, parameter)` (unique index), with `source, lat, lon, value, unit, event_time, ingested_at, updated_at`. Times are UTC.
 
 ### Simulated HDFS cluster (`docker-compose.hdfs.yml`)
 
@@ -276,13 +291,13 @@ HDFS paths:
 
 ## To be built
 
-1. **Gold daily table:** daily averages per station and parameter computed from Silver and loaded into PostgreSQL, for the timeline slider. Silver is hourly per station, which is too heavy to load for a whole year, and dashboard tools cannot read Parquet in HDFS directly.
-2. **Dashboard:** live map from `latest_readings` and a timeline from the Gold table. The tool is not chosen yet; Grafana, Superset and Streamlit can all read PostgreSQL.
-3. **Today's hourly curve:** Silver and Gold are rebuilt daily, so the timeline ends at the last run and `latest_readings` holds only one value per station. Either run them more often with `--since`, or have the consumer also write recent readings to PostgreSQL.
+1. **WAQI and OpenWeather in Gold:** match their stations to OpenAQ locations and fill the hours OpenAQ is missing.
+2. **Publish Silver and Gold to the team's HDFS cluster,** and point the streaming consumer at it.
+3. **Today's hourly curve:** Silver and Gold are rebuilt daily, so the timeline ends at the last run and `latest_readings` holds only one value per station. Either run them more often with `--since`, or have the consumer also write recent readings to MongoDB.
 4. **Automatic restarts for the producers,** for example by running them in containers with a restart policy. WAQI has no history API, so hours missed while its producer is down are lost for good.
 5. **Scheduling** for the daily Silver run and the station catalog refresh.
 6. **OpenWeather backfill:** OpenWeather's `/air_pollution/history` endpoint (free, hourly, back to November 2020) can fill gaps when its producer was down. OpenAQ gaps are filled by the historical archive.
-7. **EDA and tighter cleaning rules:** tighten `VALID_RANGE` and add outlier rules once Silver has run on real data.
+7. **Forecasting and graph analysis:** MLlib forecasts and GraphFrames on station data.
 
 ## Notes
 
