@@ -1,12 +1,6 @@
-# Spark jobs, run in containers on the HDFS network (and Kafka's and the serving
-# database's, for the consumer). Start Kafka (docker-compose.yml), HDFS
-# (docker-compose.hdfs.yml) and Postgres (docker-compose.serving.yml) first.
-#
-# Streaming consumer (src/streaming/consumer.py), runs continuously:
-#   docker compose -f docker-compose.spark.yml up -d --build
-#   docker logs -f spark-consumer
-# Batch jobs, run on demand, e.g. Silver (src/batch/build_silver.py):
-#   docker compose -f docker-compose.spark.yml run --rm spark-job /opt/spark/bin/spark-submit src/batch/build_silver.py
+# Spark in containers; start Kafka, HDFS and MongoDB first (or scripts/stack.sh).
+#   docker compose -f docker-compose.spark.yml up -d --build      # streaming consumer
+#   docker compose -f docker-compose.spark.yml run --rm spark-job /opt/spark/bin/spark-submit <script>
 name: openaq-spark
 
 x-spark: &spark
@@ -29,8 +23,16 @@ services:
     environment:
       <<: *spark-env
       KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
-      POSTGRES_HOST: postgres     # POSTGRES_PASSWORD is read from the mounted .env
+      MONGO_HOST: mongo           # MONGO_PASSWORD is read from the mounted .env
       HDFS_URI: ${HDFS_URI:-hdfs://namenode:8020}
+      # one root per rules version (v1_2); a rules change needs a new root and checkpoint
+      STREAM_SILVER_ROOT: hdfs://namenode:8020/openaq/silver/stream/v1_2
+      STREAM_SILVER_CHECKPOINT: hdfs://namenode:8020/openaq/checkpoints/silver_stream_v1_2
+      # Kafka start for a new checkpoint: earliest | latest | JSON (src.streaming.checkpoint_offsets)
+      STREAM_STARTING_OFFSETS: ${STREAM_STARTING_OFFSETS:-earliest}
+      STREAM_STARTING_OFFSETS_ARCHIVE: ${STREAM_STARTING_OFFSETS_ARCHIVE:-}
+      STREAM_STARTING_OFFSETS_LATEST: ${STREAM_STARTING_OFFSETS_LATEST:-}
+      STREAM_STARTING_OFFSETS_SILVER: ${STREAM_STARTING_OFFSETS_SILVER:-}
     command:
       - /opt/spark/bin/spark-submit
       - --master
@@ -45,7 +47,7 @@ services:
       - hdfs
       - serving
 
-  # one-off batch jobs: `run` starts it with the spark-submit command you give; `up` skips it
+  # one-off batch jobs (`run` only)
   spark-job:
     <<: *spark
     profiles: ["job"]

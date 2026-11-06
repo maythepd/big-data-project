@@ -1,8 +1,6 @@
-"""Single implementation of Silver rules as pure DataFrame transformations.
+"""Silver rules R01-R14 as DataFrame transformations (config/silver_rules_v1.yaml).
 
-Parameters live in config/silver_rules_v1.yaml. values/units checks and rule finalization EDA call these
-functions to measure impact; the Silver build calls the same ones, so the
-measured numbers match the data that is written.
+Shared by the EDA checks and the Silver build, so measured impact matches the output.
 """
 
 from pathlib import Path
@@ -15,7 +13,7 @@ DEFAULT_RULES = Path(__file__).resolve().parents[2] / "config" / "silver_rules_v
 
 def load_rules(path=DEFAULT_RULES):
     rules = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    # YAML 1.1 reads unquoted `no:` (nitric oxide) as False: reject non-string keys.
+    # YAML 1.1 reads `no:` (nitric oxide) as False
     for section in ["canonical_units", "molecular_weight", "bounds"]:
         bad = [k for k in rules[section] if not isinstance(k, str)]
         if bad:
@@ -31,14 +29,9 @@ def _mapped(column, mapping):
 
 
 def conversion_table(spark, rules):
-    """Rules as data: one row per known (parameter_std, units_n).
+    """One row per (parameter_std, units_n): unit_std, factor, temp_f, bounds, invalid_pair.
 
-    Columns: unit_std, factor (value_std = value * factor), temp_f (°F -> °C),
-    bounds b_min/b_max/b_negmin in the canonical unit, invalid_pair.
-    Joining this small table keeps every later expression a plain column
-    comparison. The first version inlined CASE chains of ~26 branches into each
-    flag; after Spark collapsed the projections the expression tree blew up and
-    the driver ran out of heap (values/units checks pilot, 24/10/2026).
+    A join instead of long CASE chains, which blew up the driver's expression tree.
     """
     mv = float(rules["molar_volume_l"])
     rows = []
@@ -62,14 +55,9 @@ def conversion_table(spark, rules):
 
 
 def normalize_units(df, rules, sensor_units=None):
-    """Add parameter_std, unit_std, value_std, unit_unconverted and the bound columns.
+    """Convert to the canonical unit (value_std, unit_std) and add the bound columns.
 
-    value_std is value_num converted to the canonical unit when the conversion
-    is defined; otherwise value_std = value_num and unit_std keeps the
-    normalized raw unit (flag `unit_unconverted`).
-    sensor_units (silver/dim_sensor_unit, R06b) overrides the declared unit per
-    (sensors_id, parameter, units): relabel_ppm -> "ppm", relabel_f -> "f"
-    (flag `unit_relabeled`); action suspect sets `unit_suspect`.
+    sensor_units (dim_sensor_unit, R06b) relabels or flags units per sensor.
     """
     norm = rules["normalization"]
     param = _mapped(F.lower(F.trim(F.col("parameter"))), norm["parameter_aliases"])
@@ -81,7 +69,8 @@ def normalize_units(df, rules, sensor_units=None):
     else:
         df = df.withColumn("action", F.lit(None).cast("string"))
     units = (F.when(F.col("action") == "relabel_ppm", F.lit("ppm"))
-              .when(F.col("action") == "relabel_f", F.lit("f")).otherwise(units))
+              .when(F.col("action") == "relabel_f", F.lit("f"))
+              .when(F.col("action") == "relabel_c", F.lit("c")).otherwise(units))
     df = (df.withColumn("parameter_std", param).withColumn("units_n", units)
             .withColumn("unit_relabeled", F.coalesce(F.col("action").startswith("relabel"), F.lit(False)))
             .withColumn("unit_suspect", F.coalesce(F.col("action") == "suspect", F.lit(False)))
@@ -98,11 +87,7 @@ def normalize_units(df, rules, sensor_units=None):
 
 
 def value_flags(df, rules):
-    """Sentinel / extreme / hard-bound / small-negative flags on value_std.
-
-    Sentinels are matched on the raw value_num (before conversion); bounds come
-    from conversion_table() columns. Requires normalize_units() first.
-    """
+    """Sentinel, extreme, hard-bound and small-negative flags (after normalize_units)."""
     raw = F.col("value_num")
     finite = raw.isNotNull() & ~F.isnan(raw) & (F.abs(raw) != float("inf"))
     sentinel = finite & raw.isin(*[float(v) for v in rules["sentinels"]])
@@ -122,9 +107,7 @@ def value_flags(df, rules):
               .drop("invalid_pair", "b_min", "b_max", "b_negmin"))
 
 
-# ---------------------------------------------------------------------------
-# Full rule set R01-R14 (SILVER_PLAN.md §8). Order matters and is fixed here.
-# ---------------------------------------------------------------------------
+# ---------- full rule set R01-R14, applied in this order ----------
 
 HARD_FLAGS = ["ts_out_of_range", "invalid_pair", "sentinel", "extreme",
               "below_min", "above_max", "unknown_parameter"]
@@ -150,7 +133,7 @@ def quarantine_reason():
 
 
 def repaired_datetime():
-    """R02: "+HH:-MM" -> "+HH:MM" (Newfoundland offsets, verified against DST in structure checks)."""
+    """R02: "+HH:-MM" -> "+HH:MM" (Newfoundland offsets)."""
     fixed = F.regexp_replace(F.col("datetime"), r"([+-]\d{2}):-(\d{2})$", "$1:$2")
     return F.to_timestamp(fixed)
 
@@ -164,10 +147,7 @@ def valid_coordinate():
 
 
 def prepare(df, rules, build_utc):
-    """R01-R04: time repair, key checks, quarantine reason, time range.
-
-    The raw string `value` is renamed to `value_raw`; `value` becomes the cleaned number.
-    """
+    """R01-R04: time repair, key checks, quarantine reason, time range."""
     df = df.withColumnRenamed("value", "value_raw")
     df = df.withColumn("datetime_utc", F.coalesce(F.col("datetime_ts"), repaired_datetime()))
     df = df.withColumn("datetime_offset_repaired",
@@ -194,32 +174,89 @@ def coordinates(df, dim_location):
               .drop("lat_ref", "lon_ref"))
 
 
-def soft_outlier_flags(df, rules):
-    """R14: spike / flatline per sensor (window by sensor and time). Flag only."""
-    so = rules["soft_outliers"]
-    from pyspark.sql import Window
-    w = Window.partitionBy("sensors_id").orderBy("datetime_utc")
-    v = F.col("value")
-    prev, nxt = F.lag("value").over(w), F.lead("value").over(w)
-    same = F.coalesce(v == prev, F.lit(False))
-    df = df.withColumn("_run", F.sum(F.when(same, 0).otherwise(1)).over(w))
-    df = df.withColumn("_run_len", F.count("*").over(Window.partitionBy("sensors_id", "_run")))
-    min_value = F.lit(None).cast("double")
-    for parameter, threshold in so["spike_min_value"].items():
-        min_value = F.when(F.col("parameter_std") == parameter, F.lit(float(threshold))).otherwise(min_value)
-    spike = (v >= min_value) & (v > float(so["spike_ratio"]) * F.greatest(prev, nxt))
-    return (df.withColumn("spike", F.coalesce(spike, F.lit(False)))
-              .withColumn("flatline", F.coalesce((F.col("_run_len") >= int(so["flatline_min_run"]))
-                                                 & v.isNotNull() & (v != 0), F.lit(False)))
-              .drop("_run", "_run_len"))
+def _per_parameter(mapping):
+    out = F.lit(None).cast("double")
+    for parameter, value in mapping.items():
+        out = F.when(F.col("parameter") == parameter, F.lit(float(value))).otherwise(out)
+    return out
 
 
-def apply_rules(df, rules, dim_location, build_utc, sensor_units=None, soft_outliers=False):
-    """Return (measurements, quarantine) DataFrames before dedup.
+def flatline_kind(df, rules):
+    """R14 flatline: a sensor repeating one value; adds flatline_kind (negative, at_floor, held).
 
-    measurements carries dq flag columns + dq_flags + dq_status + value.
-    Dedup (R13) is applied by dedup() on a sensor-partitioned frame.
+    df holds a month plus context_hours on each side, partitioned by sensors_id.
     """
+    from pyspark.sql import Window
+    fl = rules["soft_outliers"]["flatline"]
+    w = Window.partitionBy("sensors_id").orderBy("datetime_utc")
+    new = F.coalesce(F.col("value") != F.lag("value").over(w), F.lit(True))
+    df = df.withColumn("_run", F.sum(new.cast("int")).over(w))
+    run = Window.partitionBy("sensors_id", "_run")
+    df = (df.withColumn("_readings", F.count("*").over(run))
+            .withColumn("_hours", (F.max("datetime_utc").over(run).cast("long")
+                                   - F.min("datetime_utc").over(run).cast("long")) / 3600.0))
+    v, hours = F.col("value"), F.col("_hours")
+    floor = _per_parameter(fl["floor"])
+    # only parameters with a small-negative band use negative "no data" codes
+    no_negative = [k for k, b in rules["bounds"].items() if "negative_small_min" in b]
+    kind = (F.when(v < 0, F.when(F.col("parameter").isin(*no_negative),
+                                 F.when(hours >= fl["negative_min_hours"], F.lit("negative")))
+                          .when(hours >= fl["min_hours"], F.lit("held")))
+             .when(floor.isNotNull() & (v <= floor), F.when(hours >= fl["floor_min_hours"], F.lit("at_floor")))
+             .when(hours >= fl["min_hours"], F.lit("held")))
+    kind = F.when(F.col("parameter").isin(*fl["parameters"]) & (F.col("_readings") >= fl["min_readings"]), kind)
+    return df.withColumn("flatline_kind", kind).drop("_run", "_readings", "_hours")
+
+
+def spike_kind(df, rules):
+    """R14 spike: a reading far above its sensor-hour, or an hour far above its neighbours.
+
+    "Far" needs both a ratio and a minimum difference (diff only for temperature).
+    """
+    from pyspark.sql import Window
+    sp = rules["soft_outliers"]["spike"]
+    w = Window.partitionBy("sensors_id").orderBy("datetime_utc")
+    sh = Window.partitionBy("sensors_id", "_hour")
+    df = (df.withColumn("_hour", F.date_trunc("hour", "datetime_utc").cast("long"))
+            .withColumn("_hour_median", F.median("value").over(sh))
+            .withColumn("_hour_n", F.count("*").over(sh)))
+    # one entry per hour in the neighbour lists
+    first = F.coalesce(F.lag("_hour").over(w) != F.col("_hour"), F.lit(True))
+    df = df.withColumn("_hour_entry", F.when(first, F.col("_hour_median")))
+    t = Window.partitionBy("sensors_id").orderBy("_hour")
+    df = (df.withColumn("_nb", F.array_sort(F.concat(
+                F.collect_list("_hour_entry").over(t.rangeBetween(-3 * 3600, -1)),
+                F.collect_list("_hour_entry").over(t.rangeBetween(1, 3 * 3600)))))
+            .withColumn("_k", F.size("_nb"))
+            .withColumn("_local", F.expr(
+                "CASE WHEN _k < 3 THEN NULL WHEN _k % 2 = 1 THEN element_at(_nb, CAST(_k DIV 2 + 1 AS INT)) "
+                "ELSE (element_at(_nb, CAST(_k DIV 2 AS INT)) + element_at(_nb, CAST(_k DIV 2 + 1 AS INT))) / 2 END")))
+    min_diff = _per_parameter(sp["min_diff"])
+    diff_only = F.col("parameter").isin(*sp["diff_only"])
+
+    def far(x, ref):
+        above = (x >= float(sp["ratio"]) * ref) & (x - ref >= min_diff)
+        return F.coalesce(F.when(diff_only, F.abs(x - ref) >= min_diff).otherwise(above), F.lit(False))
+
+    reading = (F.col("_hour_n") >= sp["min_hour_readings"]) & far(F.col("value"), F.col("_hour_median"))
+    kind = F.when(reading, F.lit("reading")).when(far(F.col("_hour_median"), F.col("_local")), F.lit("hour"))
+    return (df.withColumn("spike_kind", F.when(min_diff.isNotNull(), kind))
+              .drop("_hour", "_hour_median", "_hour_n", "_hour_entry", "_nb", "_k", "_local"))
+
+
+def with_temporal_flags(df):
+    """Replace the R14 flags in dq_flags and recompute dq_status (idempotent)."""
+    r14 = {f: F.coalesce(F.col(f), F.lit(False)) for f in ["spike", "flatline"]}
+    flags = HARD_FLAGS + SOFT_FLAGS + INFO_FLAGS
+    arr = F.filter(F.array(*[F.when(r14[f] if f in r14 else F.array_contains("dq_flags", f), F.lit(f))
+                             for f in flags]), lambda x: x.isNotNull())
+    status = (F.when(F.exists("dq_flags", lambda x: x.isin(*HARD_FLAGS)), "invalid")
+               .when(F.exists("dq_flags", lambda x: x.isin(*SOFT_FLAGS)), "suspect").otherwise("valid"))
+    return df.withColumn("dq_flags", arr).withColumn("dq_status", status).drop("spike", "flatline")
+
+
+def apply_rules(df, rules, dim_location, build_utc, sensor_units=None):
+    """Return (measurements, quarantine) before dedup (R13)."""
     df = prepare(df, rules, build_utc)
     quarantine = df.filter(F.col("quarantine_reason").isNotNull())
     df = df.filter(F.col("quarantine_reason").isNull())
@@ -231,10 +268,8 @@ def apply_rules(df, rules, dim_location, build_utc, sensor_units=None, soft_outl
             .withColumnRenamed("v_unknown_parameter", "unknown_parameter"))
     hard = reduce_or([F.col(f) for f in HARD_FLAGS])
     df = df.withColumn("value", F.when(hard, F.lit(None).cast("double")).otherwise(F.col("value_std")))
-    if soft_outliers:
-        df = soft_outlier_flags(df, rules)
-    else:
-        df = df.withColumn("spike", F.lit(False)).withColumn("flatline", F.lit(False))
+    # R14 runs later on the built Silver (flag_temporal_outliers.py)
+    df = df.withColumn("spike", F.lit(False)).withColumn("flatline", F.lit(False))
     df = coordinates(df, dim_location)
     return df, quarantine
 
@@ -247,11 +282,7 @@ def reduce_or(columns):
 
 
 def dedup(df):
-    """R13: one row per (sensors_id, datetime_utc).
-
-    Tie-break (deterministic): non-hard rows first, then rows with a value,
-    then the smallest source_block. Requires df partitioned by sensors_id.
-    """
+    """R13: one row per (sensors_id, datetime_utc); prefer non-hard, valued, oldest block."""
     from pyspark.sql import Window
     hard = reduce_or([F.col(f) for f in HARD_FLAGS])
     key = Window.partitionBy("sensors_id", "datetime_utc")

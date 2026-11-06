@@ -1,27 +1,25 @@
-# Serving layer: the PostgreSQL database the dashboard reads. The streaming consumer
-# upserts latest_readings here every minute; docker/postgres/init.sql creates the tables.
-# Needs POSTGRES_PASSWORD in .env. From this laptop: localhost:5432, database and
-# user "airquality".
-#   docker compose -f docker-compose.serving.yml up -d
+# MongoDB serving layer: latest_readings (consumer) and Gold collections (load_mongo.py).
+# localhost:27017, user airquality (authSource admin), password MONGO_PASSWORD from .env.
 name: openaq-serving
 
 services:
-  postgres:
-    image: postgres:17.6
-    container_name: postgres
+  mongo:
+    image: mongo:8.0.4
+    container_name: mongo
+    # capped cache and memory on a shared 7.6 GB machine; lower in stack.sh lite
+    command: ["--wiredTigerCacheSizeGB", "${OPENAQ_MONGO_CACHE_GB:-1.5}"]
+    mem_limit: ${OPENAQ_MONGO_MEM:-2.5g}
     environment:
-      POSTGRES_DB: airquality
-      POSTGRES_USER: airquality
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      MONGO_INITDB_ROOT_USERNAME: airquality
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD in .env}
     ports:
-      - "127.0.0.1:5432:5432"   # reachable from this laptop only
+      - "127.0.0.1:27017:27017"   # reachable from this laptop only
     volumes:
       # `docker compose -f docker-compose.serving.yml down -v` deletes the data
-      - postgres-data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mongo-data:/data/db
 
 volumes:
-  postgres-data:
+  mongo-data:
 
 networks:
   default:

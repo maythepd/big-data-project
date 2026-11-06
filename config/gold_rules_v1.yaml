@@ -1,0 +1,78 @@
+# Gold parameters (station x hour / day, AQI). Design and decisions: GOLD_PLAN.md.
+# Thresholds come from the Silver EDA for Gold (reports/silver_for_gold_01, EDA_FINDINGS.md).
+# Read by: src/gold/* .
+version: v1
+status: draft            # G1 (05/11/2026): usable rows + station_hourly; G2 adds AQI / daily
+
+usable:
+  # Silver rows that feed Gold: dq_status valid, or suspect with ONLY these soft flags.
+  # unit_suspect / unit_unconverted (unit unknown), flatline / spike (R14) are excluded.
+  allowed_suspect_flags: [unit_relabeled, negative_small]
+
+hour:
+  # Hour of a sensor: >= this many usable readings (EDA: median 1 reading per sensor-hour).
+  min_usable_readings: 1
+  # Co-located channels with the same hourly value (twin channels, v1.2 gas twins) are counted once
+  # in value_mean: sensor means are compared after rounding to this many decimals.
+  twin_round_decimals: 6
+
+day:
+  min_hours: 18          # 75% rule: a day is valid with >= 18 of 24 hours (G2)
+
+aqi_parameters: [pm25, pm10, o3, no2, so2, co]
+
+# Rolling means: valid with >= this many hours present (75%, same rule as the day).
+rolling_min_hours: {8: 6, 24: 18}
+
+# Local day of an hour: OpenAQ labels an hourly mean with the END of its hour, and both
+# OpenAQ's daily means and VN_AQI (QĐ 1459, 2.2.2.a) take the hours labelled 01:00 .. 00:00:
+# local_date = date(hour_utc + utc_offset - day_label_shift_hours).
+day_label_shift_hours: 1
+
+nowcast:                 # PM2.5 / PM10, same algorithm in EPA TAD 2026 and QĐ 1459 2.2.1.a
+  hours: 12
+  min_weight: 0.5        # w = max(Cmin / Cmax, 0.5)
+  recent_hours: 3        # >= 2 of the 3 most recent hours must be present
+  recent_min: 2
+
+aqi:
+  # US EPA, Technical Assistance Document for the Reporting of Daily Air Quality (AQI),
+  # EPA-403/B-26-003, May 2026, Table 6 (PM2.5 breakpoints of the 2024 revision) and footnotes.
+  # Segments: [conc_lo, conc_hi, aqi_lo, aqi_hi]; units as in the table.
+  us_epa:
+    units: {o3: ppm, co: ppm, so2: ppb, no2: ppb, pm25: "µg/m³", pm10: "µg/m³"}
+    truncate_decimals: {o3: 3, pm25: 1, pm10: 0, co: 1, so2: 0, no2: 0}
+    above_top: extrapolate        # footnote 4: AQI > 500 on the slope of the 301-500 segment
+    breakpoints:
+      o3_8h:  [[0.000, 0.054, 0, 50], [0.055, 0.070, 51, 100], [0.071, 0.085, 101, 150],
+               [0.086, 0.105, 151, 200], [0.106, 0.200, 201, 300]]          # > 0.200: 1-hour only
+      o3_1h:  [[0.125, 0.164, 101, 150], [0.165, 0.204, 151, 200], [0.205, 0.404, 201, 300],
+               [0.405, 0.604, 301, 500]]                                     # < 0.125: no index
+      pm25:   [[0.0, 9.0, 0, 50], [9.1, 35.4, 51, 100], [35.5, 55.4, 101, 150],
+               [55.5, 125.4, 151, 200], [125.5, 225.4, 201, 300], [225.5, 325.4, 301, 500]]
+      pm10:   [[0, 54, 0, 50], [55, 154, 51, 100], [155, 254, 101, 150], [255, 354, 151, 200],
+               [355, 424, 201, 300], [425, 604, 301, 500]]
+      co:     [[0.0, 4.4, 0, 50], [4.5, 9.4, 51, 100], [9.5, 12.4, 101, 150], [12.5, 15.4, 151, 200],
+               [15.5, 30.4, 201, 300], [30.5, 50.4, 301, 500]]
+      so2_1h: [[0, 35, 0, 50], [36, 75, 51, 100], [76, 185, 101, 150], [186, 304, 151, 200]]
+      so2_24h: [[305, 604, 201, 300], [605, 1004, 301, 500]]                # used when 1-hour >= 305
+      no2:    [[0, 53, 0, 50], [54, 100, 51, 100], [101, 360, 101, 150], [361, 649, 151, 200],
+               [650, 1249, 201, 300], [1250, 2049, 301, 500]]
+  # Vietnam, QĐ 1459/QĐ-TCMT (12/11/2019), Bảng 2: BPi in µg/m³ for every pollutant (CO too).
+  # Continuous levels I = 0, 50, 100, 150, 200, 300, 400, 500; "-" = no level.
+  vn:
+    units: {o3: "µg/m³", co: "µg/m³", so2: "µg/m³", no2: "µg/m³", pm25: "µg/m³", pm10: "µg/m³"}
+    levels: [0, 50, 100, 150, 200, 300, 400, 500]
+    above_top: cap                # "≥" in the last row: 500
+    bp:
+      o3_1h: [0, 160, 200, 300, 400, 800, 1000, 1200]
+      o3_8h: [0, 100, 120, 170, 210, 400]          # daily only; not computed when max 8h > 400
+      co:    [0, 10000, 30000, 45000, 60000, 90000, 120000, 150000]
+      so2:   [0, 125, 350, 550, 800, 1600, 2100, 2630]
+      no2:   [0, 100, 200, 700, 1200, 2350, 3100, 3850]
+      pm10:  [0, 50, 150, 250, 350, 420, 500, 600]
+      pm25:  [0, 25, 50, 80, 150, 250, 350, 500]
+    # Silver gases are ppm: µg/m³ = ppm * MW * 1000 / molar volume (silver_rules molecular_weight, 24.45 L)
+
+# Vietnam locations (dashboard / MongoDB scope): the OpenAQ station catalog of the streaming side.
+vn_locations: data/dim/openaq_locations.parquet

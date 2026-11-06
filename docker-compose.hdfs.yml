@@ -1,18 +1,11 @@
-# Multi-machine HDFS cluster for testing block replication: each container plays
-# one machine (1 NameNode + 4 DataNodes) and every block is stored on 3 different
-# DataNodes (dfs.replication=3). With 4 DataNodes, stopping one makes HDFS copy
-# its blocks to the remaining nodes. To simulate more machines, copy a datanodeN
-# service and its volume.
-#
-# Kept separate from docker-compose.yml (Kafka) so the batch and streaming stacks
-# start and stop independently:
+# Simulated HDFS: 1 NameNode + 4 DataNodes, each block on 3 of them.
 #   docker compose -f docker-compose.hdfs.yml up -d
 #   docker compose -f docker-compose.hdfs.yml run --rm hdfs-client hdfs dfsadmin -report
 name: openaq-hdfs
 
 x-hadoop: &hadoop
   image: apache/hadoop:3.4.3
-  # named volumes are created root-owned, so the daemons run as root (the HDFS superuser)
+  # volumes are root-owned, so the daemons run as root
   user: root
   environment: &hadoop-env
     CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
@@ -21,10 +14,9 @@ x-hadoop: &hadoop
     HDFS-SITE.XML_dfs.datanode.data.dir: /hadoop/dfs/data
     # container IPs have no reverse DNS entry for the NameNode to verify
     HDFS-SITE.XML_dfs.namenode.datanode.registration.ip-hostname-check: "false"
-    # a stopped DataNode is declared dead after 2 * 15 s + 10 * 3 s heartbeats = 1 min
-    # (default 10.5 min), so re-replication starts while you watch
+    # a stopped DataNode is declared dead after 1 min (default 10.5)
     HDFS-SITE.XML_dfs.namenode.heartbeat.recheck-interval: "15000"
-    HADOOP_HEAPSIZE_MAX: 512m
+    HADOOP_HEAPSIZE_MAX: ${OPENAQ_HDFS_HEAP:-512m}   # scripts/stack.sh lite lowers it
 
 x-datanode: &datanode
   <<: *hadoop
@@ -75,9 +67,7 @@ services:
     volumes:
       - datanode4:/hadoop/dfs/data
 
-  # Runs hdfs commands and project scripts inside the cluster network: a client
-  # outside Docker can reach the NameNode port but not the DataNodes, which serve
-  # block data from container IPs. `run` starts it on demand; `up` skips it.
+  # hdfs commands inside the cluster network (DataNodes are unreachable from outside)
   hdfs-client:
     <<: *hadoop
     profiles: ["client"]
