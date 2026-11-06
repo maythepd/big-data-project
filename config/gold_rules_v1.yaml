@@ -1,8 +1,6 @@
-# Gold parameters (station x hour / day, AQI). Design and decisions: GOLD_PLAN.md.
-# Thresholds come from the Silver EDA for Gold (reports/silver_for_gold_01, EDA_FINDINGS.md).
-# Read by: src/gold/* .
+# Gold parameters (station x hour / day, AQI), read by src/gold/*.
 version: v1
-status: draft            # G1 (05/11/2026): usable rows + station_hourly; G2 adds AQI / daily
+status: draft
 
 usable:
   # Silver rows that feed Gold: dq_status valid, or suspect with ONLY these soft flags.
