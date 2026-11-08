@@ -1,0 +1,41 @@
+# Producers in containers, restarted after a crash and when Docker starts again.
+# Start Kafka first and build the station catalogs (data/dim/*.parquet) on this computer.
+#   docker compose -f docker-compose.producers.yml up -d --build
+#   docker logs -f producer-waqi
+name: openaq-producers
+
+x-producer: &producer
+  build: docker/producer
+  image: openaq-producer
+  working_dir: /app
+  # WAQI has no history API: every hour a producer is down is lost for good
+  restart: unless-stopped
+  init: true          # forwards `docker stop` to Python, which ignores SIGTERM as PID 1
+  environment:
+    PYTHONPATH: /app
+    PYTHONUNBUFFERED: "1"
+    # API keys are read from the mounted .env
+    KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
+  volumes:
+    - .:/app          # code, .env and data/dim
+
+services:
+  producer-openaq:
+    <<: *producer
+    container_name: producer-openaq
+    command: ["python", "-m", "src.ingestion.openaq.producer"]
+
+  producer-waqi:
+    <<: *producer
+    container_name: producer-waqi
+    command: ["python", "-m", "src.ingestion.waqi.producer"]
+
+  producer-openweather:
+    <<: *producer
+    container_name: producer-openweather
+    command: ["python", "-m", "src.ingestion.openweather.producer"]
+
+networks:
+  default:
+    external: true
+    name: openaq-kafka
