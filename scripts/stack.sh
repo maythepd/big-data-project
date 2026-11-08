@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts and stops the Docker stacks in order.
-#   lite     MongoDB, Kafka 2/3 brokers, HDFS NameNode + 2/4 DataNodes, consumer; small heaps
+#   lite     MongoDB, Kafka 2/3 brokers, HDFS NameNode + 2/4 DataNodes, consumer, producers; small heaps
 #   full     every service, Kafka UI included
 #   serving  MongoDB only
 #   stop     stop everything (volumes are kept)
@@ -14,6 +14,7 @@ KAFKA="docker compose -f docker-compose.yml"
 HDFS="docker compose -f docker-compose.hdfs.yml"
 MONGO="docker compose -f docker-compose.serving.yml"
 SPARK="docker compose -f docker-compose.spark.yml"
+PRODUCERS="docker compose -f docker-compose.producers.yml"
 
 # lite: small heaps for the small streaming load
 lite_env() {
@@ -70,6 +71,21 @@ start_consumer() {
   echo "  consumer started: docker logs -f spark-consumer (Spark UI http://localhost:4040)"
 }
 
+start_producers() {   # only sources with a station catalog; without one a producer exits and restarts forever
+  local source services=()
+  for source in openaq waqi openweather; do
+    if [ -f "data/dim/${source}_stations.parquet" ]; then
+      services+=("producer-$source")
+    else
+      echo "  producer-$source skipped: run python -m src.ingestion.$source.fetch_dimensions first" >&2
+    fi
+  done
+  if [ ${#services[@]} -gt 0 ]; then
+    $PRODUCERS up -d --build "${services[@]}"
+    echo "  producers started: docker logs -f producer-openaq (or -waqi, -openweather)"
+  fi
+}
+
 case "${1:-}" in
   lite)
     guard_mongo
@@ -81,6 +97,7 @@ case "${1:-}" in
     start_kafka kafka1 kafka2
     start_hdfs namenode datanode1 datanode2
     start_consumer
+    start_producers
     ;;
   full)
     guard_mongo
@@ -89,12 +106,14 @@ case "${1:-}" in
     start_kafka
     start_hdfs
     start_consumer
+    start_producers
     ;;
   serving)
     guard_mongo
     start_mongo
     ;;
   stop)
+    $PRODUCERS stop
     docker stop spark-consumer >/dev/null 2>&1 || true
     $HDFS stop
     $KAFKA stop
