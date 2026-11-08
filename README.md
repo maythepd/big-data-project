@@ -67,6 +67,7 @@ src/gold/                    Gold job: station x hour, AQI and daily tables
 src/serving/                 Gold Parquet to the MongoDB serving collections
 src/dashboard/               Streamlit dashboard
 config/                      Silver and Gold rule parameters
+tests/                       pytest suite for the Gold and AQI logic
 scripts/stack.sh             starts and stops the Docker stacks in order
 prepare_shard.ipynb          splits the archive manifest into 30 shards for Kaggle
 kaggle_crawl.ipynb           downloads one shard in a Kaggle session
@@ -167,6 +168,18 @@ All commands below run from the project root.
 5. `docker compose down`
 
 `down` keeps all data in Docker volumes. `down -v` deletes that stack's data permanently.
+
+### Tests
+
+`tests/` checks the Gold logic on small Spark fixtures: US EPA and VN_AQI breakpoints, unit
+conversion and truncation, NowCast, the SO2 and VN PM rules, rolling means, local days and the
+18-of-24-hours rule. Expected values are worked by hand from the published tables. They need
+Java 8, 11 or 17 (Spark 3.5 does not run on newer Java) and take about 4 minutes:
+
+```
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
 
 ## Components
 
