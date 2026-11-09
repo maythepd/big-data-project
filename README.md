@@ -32,6 +32,7 @@ OpenAQ / WAQI / OpenWeather APIs                                                
 | Uploading raw files to HDFS (`stage_to_hdfs.py`) | Done |
 | Station catalogs and producers for OpenAQ, WAQI and OpenWeather | Done |
 | Producers count a reading as sent only after Kafka confirms it | Written; logic tested locally |
+| Producers in containers, restarted after a crash or a Docker restart | Written; not yet run in Docker |
 | Simulated HDFS cluster in Docker: 1 NameNode and 4 DataNodes, 3 copies of every block | Running in local OpenAQ pilot; fault-injection drills pending |
 | Kafka cluster in Docker: 3 brokers, 3 copies of every message | Running in local OpenAQ pilot |
 | Spark streaming consumer: stream archive in HDFS and `latest_readings` in MongoDB | Local OpenAQ API → Kafka → Spark → HDFS/MongoDB verified |
@@ -55,7 +56,9 @@ docker-compose.yml           Kafka: 3 brokers, topic creation, Kafka UI
 docker-compose.hdfs.yml      HDFS: NameNode, 4 DataNodes and an hdfs-client container
 docker-compose.serving.yml   MongoDB for the dashboard
 docker-compose.spark.yml     Spark: the streaming consumer and one-off batch jobs
+docker-compose.producers.yml the 3 producers, restarted automatically
 docker/spark/Dockerfile      Spark image with python-dotenv and pymongo
+docker/producer/Dockerfile   Python image for the producers
 src/common/                  settings (config.py) and the shared message format (schema.py)
 src/ingestion/<source>/      fetch_dimensions.py (station catalog) and producer.py (API to Kafka)
 src/streaming/               Kafka to the HDFS stream archive, MongoDB latest_readings and streaming Silver
@@ -67,6 +70,7 @@ src/gold/                    Gold job: station x hour, AQI and daily tables
 src/serving/                 Gold Parquet to the MongoDB serving collections
 src/dashboard/               Streamlit dashboard
 config/                      Silver and Gold rule parameters
+tests/                       pytest suite for the Gold and AQI logic
 scripts/stack.sh             starts and stops the Docker stacks in order
 prepare_shard.ipynb          splits the archive manifest into 30 shards for Kaggle
 kaggle_crawl.ipynb           downloads one shard in a Kaggle session
@@ -124,13 +128,14 @@ All commands below run from the project root.
    python -m src.ingestion.openweather.fetch_dimensions
    ```
    These write `data/dim/*.parquet`, the stations each producer polls. OpenAQ also writes `openaq_locations.parquet`, every fixed Vietnam location including inactive ones, which Silver uses to pick Vietnam out of the global archive.
-2. Start the producers, one terminal each:
+2. Start the producers in containers (`scripts/stack.sh` does this for every source with a catalog):
    ```
-   python -m src.ingestion.openaq.producer
-   python -m src.ingestion.waqi.producer
-   python -m src.ingestion.openweather.producer
+   docker compose -f docker-compose.producers.yml up -d --build
+   docker logs -f producer-waqi
    ```
-   Add `--dry-run` to print one cycle of messages without sending them. Each cycle logs `cycle done, sent N new readings`.
+   Docker restarts a producer when it exits, for example when Kafka is not reachable at start, and starts them again with Docker Desktop, until they are stopped with `docker compose -f docker-compose.producers.yml stop`. Each cycle logs `cycle done, sent N new readings`. The containers read the code, `.env` and `data/dim/` from the project folder; after refreshing the catalogs, restart them to load the new stations.
+
+   To try a source by hand, run it on this computer instead, for example `python -m src.ingestion.openaq.producer --dry-run`, which prints one cycle of messages without sending them. Do not run a source by hand while its container runs, or every reading is sent twice.
 3. Start the streaming consumer:
    ```
    docker compose -f docker-compose.spark.yml up -d --build
@@ -161,12 +166,24 @@ All commands below run from the project root.
 `scripts/stack.sh stop`, or in reverse order:
 
 1. `docker compose -f docker-compose.spark.yml down`
-2. Ctrl+C in each producer terminal
+2. `docker compose -f docker-compose.producers.yml down`
 3. `docker compose -f docker-compose.serving.yml down`
 4. `docker compose -f docker-compose.hdfs.yml down`
 5. `docker compose down`
 
 `down` keeps all data in Docker volumes. `down -v` deletes that stack's data permanently.
+
+### Tests
+
+`tests/` checks the Gold logic on small Spark fixtures: US EPA and VN_AQI breakpoints, unit
+conversion and truncation, NowCast, the SO2 and VN PM rules, rolling means, local days and the
+18-of-24-hours rule. Expected values are worked by hand from the published tables. They need
+Java 8, 11 or 17 (Spark 3.5 does not run on newer Java) and take about 4 minutes:
+
+```
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
 
 ## Components
 
@@ -216,6 +233,7 @@ Each source has a `fetch_dimensions.py`, which builds its station catalog in `da
   as separate parameters (`aqi_pm25`, `aqi_no2`, ...) with unit `us_aqi`.
 - Messages are keyed by `station_id`, so each station's readings stay in order within one partition.
 - Readings older than 1 day, and readings already sent, are skipped. A reading is only recorded as sent after Kafka confirms the write (`acks="all"`). Failed sends are logged as `N readings failed to send, retrying next cycle` and sent again in the next cycle, so a reading can occasionally arrive twice. Consumers deduplicate.
+- The sent readings are remembered in memory only, so after a restart a producer sends the last day's readings again. Consumers deduplicate them too.
 
 ### Kafka (`docker-compose.yml`)
 
@@ -294,10 +312,9 @@ HDFS paths:
 1. **WAQI and OpenWeather in Gold:** match their stations to OpenAQ locations and fill the hours OpenAQ is missing.
 2. **Publish Silver and Gold to the team's HDFS cluster,** and point the streaming consumer at it.
 3. **Today's hourly curve:** Silver and Gold are rebuilt daily, so the timeline ends at the last run and `latest_readings` holds only one value per station. Either run them more often with `--since`, or have the consumer also write recent readings to MongoDB.
-4. **Automatic restarts for the producers,** for example by running them in containers with a restart policy. WAQI has no history API, so hours missed while its producer is down are lost for good.
-5. **Scheduling** for the daily Silver run and the station catalog refresh.
-6. **OpenWeather backfill:** OpenWeather's `/air_pollution/history` endpoint (free, hourly, back to November 2020) can fill gaps when its producer was down. OpenAQ gaps are filled by the historical archive.
-7. **Forecasting and graph analysis:** MLlib forecasts and GraphFrames on station data.
+4. **Scheduling** for the daily Silver run and the station catalog refresh.
+5. **OpenWeather backfill:** OpenWeather's `/air_pollution/history` endpoint (free, hourly, back to November 2020) can fill gaps when its producer was down. OpenAQ gaps are filled by the historical archive.
+6. **Forecasting and graph analysis:** MLlib forecasts and GraphFrames on station data.
 
 ## Notes
 

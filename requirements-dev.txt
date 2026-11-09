@@ -1,0 +1,4 @@
+-r requirements.txt
+pyspark==3.5.9
+pytest
+setuptools  # PySpark 3.5 pandas UDFs import distutils, removed from Python 3.12
