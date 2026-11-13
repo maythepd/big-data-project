@@ -18,9 +18,9 @@ if __package__ in (None, ""):
 
 from src.eda.common import save_csv
 from src.silver.rules import SOFT_FLAGS
+from src.common.config import LAKE
 
 ROOT = Path(__file__).resolve().parents[2]
-LAKE = Path.home() / "openaq_lake"
 DEFAULT_GOLD_RULES = ROOT / "config" / "gold_rules_v1.yaml"
 COLUMNS = ["location_id", "sensors_id", "datetime_utc", "utc_offset_min", "parameter", "unit", "value",
            "dq_flags", "dq_status"]

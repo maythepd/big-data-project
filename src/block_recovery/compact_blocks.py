@@ -13,11 +13,16 @@ import json
 import math
 from pathlib import Path
 import shutil
+import sys
 
 import pyarrow.parquet as pq
 from pyspark.sql import SparkSession, functions as F
 
-DEFAULT_LAKE = Path.home() / "openaq_lake"
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.common.config import LAKE
+
 SORT_KEYS = ["location_id", "sensors_id", "datetime_ts"]
 MB = 1 << 20
 SMALL_SPLIT = 160 * MB
@@ -30,7 +35,7 @@ def uri(path):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--lake", default=str(DEFAULT_LAKE))
+    p.add_argument("--lake", default=str(LAKE))
     p.add_argument("--run-id", default="compact_blocks_01")
     p.add_argument("--large-month-mb", type=int, default=512,
                    help="months above this size get their own job")

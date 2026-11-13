@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.dashboard.common import (BANDS, NEUTRAL, NO_DATA, POLLUTANT_LABEL, POLLUTANTS, UNIT_NOTE,
+from src.dashboard.common import (BANDS, BASEMAP_LAYERS, NEUTRAL, NO_DATA, POLLUTANT_LABEL, POLLUTANTS, UNIT_NOTE,
                                   band, band_colors, band_names, stations, std_state, style,
                                   vn_daily_aqi, vn_hourly_aqi)
 
@@ -42,7 +42,7 @@ def aqi_map(view, std, aqi_col, main_col, height=560):
                           ")<br>Chất chi phối: %{customdata[2]}<extra></extra>"))
     has = view[view[aqi_col].notna()]
     center, zoom = map_view(has if len(has) else view)
-    fig.update_layout(mapbox=dict(style="open-street-map", center=center, zoom=zoom), height=height,
+    fig.update_layout(mapbox=dict(style="white-bg", layers=BASEMAP_LAYERS, center=center, zoom=zoom), height=height,
                       margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor="rgba(0,0,0,0)",
                       legend=dict(title="Mức AQI", orientation="h", y=-0.02))
     return fig

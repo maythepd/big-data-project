@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "openaq_reading_renamed",
+  "description": "v2 with value and value_raw renamed to measurement and measurement_raw (a breaking change).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source",
+    "station_id",
+    "location_id",
+    "sensors_id",
+    "parameter",
+    "measurement_raw",
+    "unit",
+    "datetime"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer"
+    },
+    "source": {
+      "type": "string"
+    },
+    "station_id": {
+      "type": "string"
+    },
+    "location_id": {
+      "type": "integer"
+    },
+    "sensors_id": {
+      "type": "integer"
+    },
+    "location_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lat": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "lon": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "parameter": {
+      "type": "string"
+    },
+    "parameter_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "unit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "units_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "datetime": {
+      "type": "string"
+    },
+    "datetime_local_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ingested_at": {
+      "type": "string"
+    },
+    "measurement": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "measurement_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

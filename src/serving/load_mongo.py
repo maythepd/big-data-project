@@ -23,9 +23,8 @@ from pymongo import ASCENDING, GEOSPHERE, MongoClient
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.common.config import DIM_DIR, MONGO_DB, mongo_uri
+from src.common.config import DIM_DIR, LAKE, MONGO_DB, mongo_uri
 
-LAKE = Path.home() / "openaq_lake"
 GOLD = LAKE / "gold"
 AQI_PARAMETERS = ["pm25", "pm10", "o3", "no2", "so2", "co"]
 BATCH_ROWS = 20_000

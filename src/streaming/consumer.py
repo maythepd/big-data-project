@@ -5,23 +5,39 @@ A new checkpoint starts from STREAM_STARTING_OFFSETS[_ARCHIVE|_LATEST|_SILVER]
 (earliest, latest or JSON offsets from src.streaming.checkpoint_offsets).
 
     docker compose -f docker-compose.spark.yml up -d --build
+
+The big-data experiments run a second copy (service spark-replay) on the replay topic with
+its own root; the STREAM_* variables below default to the production consumer.
 """
 from datetime import datetime, timezone
+import json
 import os
 import time
 
 from pymongo import ASCENDING, MongoClient, UpdateOne
 from pyspark.errors import StreamingQueryException
 from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.streaming import StreamingQueryListener
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 from src.common.config import KAFKA_BOOTSTRAP_SERVERS, MONGO_DB, TOPIC_NAME, mongo_uri
 
 HDFS = os.getenv("HDFS_URI", "hdfs://namenode:8020").rstrip("/")
-ARCHIVE_PATH = f"{HDFS}/openaq/stream/readings"
-ARCHIVE_CHECKPOINT = f"{HDFS}/openaq/checkpoints/stream_readings"
-LATEST_CHECKPOINT = f"{HDFS}/openaq/checkpoints/latest_readings"
-SILVER_ROOT = os.getenv("STREAM_SILVER_ROOT", f"{HDFS}/openaq/silver/stream/v1")
-SILVER_CHECKPOINT = os.getenv("STREAM_SILVER_CHECKPOINT", f"{HDFS}/openaq/checkpoints/silver_stream_v1")
+TOPIC = os.getenv("STREAM_TOPIC") or TOPIC_NAME
+ROOT = (os.getenv("STREAM_HDFS_ROOT") or f"{HDFS}/openaq").rstrip("/")
+ARCHIVE_PATH = f"{ROOT}/stream/readings"
+ARCHIVE_CHECKPOINT = f"{ROOT}/checkpoints/stream_readings"
+LATEST_CHECKPOINT = f"{ROOT}/checkpoints/latest_readings"
+DEADLETTER_PATH = f"{ROOT}/stream/deadletter"
+DEADLETTER_CHECKPOINT = f"{ROOT}/checkpoints/deadletter"
+SILVER_ROOT = os.getenv("STREAM_SILVER_ROOT", f"{ROOT}/silver/stream/v1")
+SILVER_CHECKPOINT = os.getenv("STREAM_SILVER_CHECKPOINT", f"{ROOT}/checkpoints/silver_stream_v1")
+QUERIES = [q.strip() for q in (os.getenv("STREAM_QUERIES") or "archive,latest,silver,deadletter").split(",")
+           if q.strip()]
+# backpressure: at most this many Kafka records per micro-batch (unset = everything available)
+MAX_OFFSETS_PER_TRIGGER = os.getenv("STREAM_MAX_OFFSETS_PER_TRIGGER") or None
+SHUFFLE_PARTITIONS = os.getenv("STREAM_SHUFFLE_PARTITIONS") or "1"
+ARCHIVE_TRIGGER = os.getenv("STREAM_ARCHIVE_TRIGGER") or "5 minutes"
+PROGRESS_LOG = os.getenv("STREAM_PROGRESS_LOG") or None   # one JSON line per micro-batch
 
 # the fields schema.make_message writes
 MESSAGE_SCHEMA = StructType([
@@ -61,11 +77,53 @@ def starting_offsets(query):
 
 def kafka_messages(spark, query):
     """One Kafka source per query, so each keeps its own offsets."""
-    return (spark.readStream.format("kafka")
-            .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
-            .option("subscribe", TOPIC_NAME)
-            .option("startingOffsets", starting_offsets(query))
-            .load())
+    reader = (spark.readStream.format("kafka")
+              .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
+              .option("subscribe", TOPIC)
+              .option("startingOffsets", starting_offsets(query)))
+    if MAX_OFFSETS_PER_TRIGGER:
+        reader = reader.option("maxOffsetsPerTrigger", MAX_OFFSETS_PER_TRIGGER)
+    return reader.load()
+
+
+class ProgressLog(StreamingQueryListener):
+    """Append each micro-batch's progress (rates, durations, lag, watermark drops) as a JSON line."""
+
+    def __init__(self, path):
+        self.path = path
+        self.names = {}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    def write(self, line):
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line) + "\n")
+
+    def onQueryStarted(self, event):
+        self.names[str(event.id)] = event.name
+
+    def onQueryProgress(self, event):
+        p = json.loads(event.progress.json)
+        source = (p.get("sources") or [{}])[0]
+        metric = lambda k: float((source.get("metrics") or {}).get(k) or 0)   # Spark reports them as text
+        state = p.get("stateOperators") or []
+        line = {"query": p.get("name"), "batch": p.get("batchId"), "timestamp": p.get("timestamp"),
+                "rows": p.get("numInputRows"), "input_rps": p.get("inputRowsPerSecond"),
+                "processed_rps": p.get("processedRowsPerSecond"), "duration_ms": p.get("durationMs"),
+                "offsets_behind_max": metric("maxOffsetsBehindLatest"),
+                "offsets_behind_avg": metric("avgOffsetsBehindLatest"),
+                "watermark": (p.get("eventTime") or {}).get("watermark"),
+                "state_rows": sum(s.get("numRowsTotal", 0) for s in state),
+                "state_memory_bytes": sum(s.get("memoryUsedBytes", 0) for s in state),
+                "dropped_by_watermark": sum(s.get("numRowsDroppedByWatermark", 0) for s in state)}
+        self.write(line)
+
+    def onQueryIdle(self, event):
+        # Spark 3.5 reports triggers without new data here, not in onQueryProgress
+        self.write({"query": self.names.get(str(event.id)), "batch": None, "timestamp": event.timestamp,
+                    "rows": 0, "offsets_behind_max": 0, "idle": True})
+
+    def onQueryTerminated(self, event):
+        pass
 
 
 def mongo():
@@ -87,17 +145,44 @@ def newest_update(row):
                      [{"$set": fields}], upsert=True)
 
 
+def checked(messages):
+    """Kafka records -> typed readings plus reject_reason (null = usable) and Kafka provenance."""
+    raw = F.col("value").cast("string")
+    r = F.from_json(raw, MESSAGE_SCHEMA)
+    df = (messages.select(raw.alias("raw_json"), F.col("partition").alias("kafka_partition"),
+                          F.col("offset").alias("kafka_offset"), F.col("timestamp").alias("kafka_timestamp"),
+                          r.alias("r"))
+          .select("raw_json", "kafka_partition", "kafka_offset", "kafka_timestamp", "r.*")
+          .withColumn("event_time", F.try_to_timestamp("datetime"))
+          .withColumn("ingested_at", F.try_to_timestamp("ingested_at")))
+    reason = (F.when(F.get_json_object("raw_json", "$").isNull(), "malformed_json")
+               .when(F.col("station_id").isNull(), "no_station_id")
+               .when(F.col("parameter").isNull(), "no_parameter")
+               .when(F.col("value").isNull(), "no_numeric_value")
+               .when(F.col("event_time").isNull(), "bad_datetime")
+               # a future timestamp would push the watermark ahead
+               .when(F.col("event_time") > F.current_timestamp() + F.expr("INTERVAL 1 HOUR"), "future_event_time"))
+    return df.withColumn("reject_reason", reason)
+
+
 def parse(messages):
-    """Kafka records -> one typed row per reading; malformed messages are dropped."""
-    r = F.from_json(F.col("value").cast("string"), MESSAGE_SCHEMA)
-    return (messages.select(r.alias("r")).select("r.*")
-            .withColumn("event_time", F.try_to_timestamp("datetime"))
-            .withColumn("ingested_at", F.try_to_timestamp("ingested_at"))
-            .drop("datetime")
-            .where(F.col("station_id").isNotNull() & F.col("parameter").isNotNull()
-                   & F.col("value").isNotNull() & F.col("event_time").isNotNull())
-            # a future timestamp would push the watermark ahead
-            .where(F.col("event_time") <= F.current_timestamp() + F.expr("INTERVAL 1 HOUR")))
+    """Kafka records -> one typed row per usable reading; the rest go to the dead-letter store."""
+    return (checked(messages).where(F.col("reject_reason").isNull())
+            .select(*[f.name for f in MESSAGE_SCHEMA if f.name != "datetime"], "event_time"))
+
+
+def start_deadletter(messages):
+    """Records parse() rejects, raw and with the reason, so nothing disappears silently."""
+    return (checked(messages).where(F.col("reject_reason").isNotNull())
+            .select("raw_json", "reject_reason", "kafka_partition", "kafka_offset", "kafka_timestamp",
+                    F.to_date("kafka_timestamp").alias("date"))
+            .writeStream.format("parquet")
+            .queryName("deadletter")
+            .option("path", DEADLETTER_PATH)
+            .option("checkpointLocation", DEADLETTER_CHECKPOINT)
+            .partitionBy("date")
+            .trigger(processingTime=ARCHIVE_TRIGGER)
+            .start())
 
 
 def latest(readings):
@@ -118,7 +203,7 @@ def start_archive(readings):
             .option("path", ARCHIVE_PATH)
             .option("checkpointLocation", ARCHIVE_CHECKPOINT)
             .partitionBy("date")
-            .trigger(processingTime="5 minutes")    # fewer, larger files than a short trigger
+            .trigger(processingTime=ARCHIVE_TRIGGER)    # long by default: fewer, larger files
             .start())
 
 
@@ -168,15 +253,21 @@ def main():
              .config("spark.sql.ansi.enabled", "false")
              .config("spark.sql.codegen.hugeMethodLimit", "8000")
              # small stream: one partition; fixed by the archive checkpoint
-             .config("spark.sql.shuffle.partitions", "1")
+             .config("spark.sql.shuffle.partitions", SHUFFLE_PARTITIONS)
              .getOrCreate())
     spark.sparkContext.setLogLevel("WARN")
+    if PROGRESS_LOG:
+        spark.streams.addListener(ProgressLog(PROGRESS_LOG))
 
-    supervise(spark, {
+    starters = {
         "archive": lambda: start_archive(parse(kafka_messages(spark, "archive"))),
         "latest": lambda: start_latest(parse(kafka_messages(spark, "latest"))),
         "silver": lambda: start_silver(kafka_messages(spark, "silver")),
-    })
+        "deadletter": lambda: start_deadletter(kafka_messages(spark, "deadletter")),
+    }
+    log(f"topic {TOPIC}, root {ROOT}, queries {QUERIES}, maxOffsetsPerTrigger {MAX_OFFSETS_PER_TRIGGER}, "
+        f"shuffle partitions {SHUFFLE_PARTITIONS}")
+    supervise(spark, {name: starters[name] for name in QUERIES})
 
 
 def supervise(spark, starters):

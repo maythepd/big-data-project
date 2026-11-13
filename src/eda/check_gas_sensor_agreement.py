@@ -17,8 +17,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.common.schema import MOLAR_VOLUME, MOLECULAR_WEIGHT
+from src.common.config import LAKE
 
-LAKE = Path.home() / "openaq_lake"
 GASES = ["no2", "so2", "co", "o3", "no"]
 
 

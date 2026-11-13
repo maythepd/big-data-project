@@ -25,8 +25,8 @@ if __package__ in (None, ""):
 
 from src.eda.common import count_if, read_compact, save_csv
 from src.silver.rules import DEFAULT_RULES, load_rules, normalize_units, value_flags
+from src.common.config import LAKE
 
-DEFAULT_LAKE = Path.home() / "openaq_lake"
 FLAGS = ["v_sentinel", "v_extreme", "v_invalid_pair", "v_below_min", "v_above_max",
          "v_negative_small", "v_unknown_parameter", "unit_unconverted"]
 QUANTILES = [0.001, 0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99, 0.999]
@@ -80,8 +80,8 @@ def soft_outliers(df, rules, months):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--input", default=str(DEFAULT_LAKE / "near_silver_compact"))
-    p.add_argument("--report", default=str(DEFAULT_LAKE / "reports" / "values_units_full_01"))
+    p.add_argument("--input", default=str(LAKE / "near_silver_compact"))
+    p.add_argument("--report", default=str(LAKE / "reports" / "values_units_full_01"))
     p.add_argument("--rules", default=str(DEFAULT_RULES))
     p.add_argument("--months", nargs="*", help="YYYY-MM subset for a pilot (default: all)")
     p.add_argument("--resume", action="store_true", help="reuse outputs of an earlier run (skip steps with _SUCCESS)")

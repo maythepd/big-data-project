@@ -3,6 +3,7 @@
 
 # generated data
 data/
+openaq_lake/
 
 # python
 __pycache__/
@@ -11,3 +12,5 @@ __pycache__/
 
 # os
 .DS_Store
+
+atlas-credentials.env

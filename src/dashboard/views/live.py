@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.dashboard.common import POLLUTANT_LABEL, latest
+from src.dashboard.common import BASEMAP_LAYERS, POLLUTANT_LABEL, latest
 
 
 @st.fragment(run_every=60)
@@ -33,7 +33,7 @@ def live_block():
                                      marker=dict(size=12, color=sub["value"], colorscale="YlOrRd", showscale=True),
                                      customdata=list(zip(sub["station_id"], sub["value"], sub["event_time"].dt.strftime("%H:%M %d/%m"))),
                                      hovertemplate="%{customdata[0]}: %{customdata[1]} (%{customdata[2]})<extra></extra>"))
-    fig.update_layout(mapbox=dict(style="open-street-map", center=dict(lat=16, lon=106), zoom=4.6), height=480,
+    fig.update_layout(mapbox=dict(style="white-bg", layers=BASEMAP_LAYERS, center=dict(lat=16, lon=106), zoom=4.6), height=480,
                       margin=dict(l=0, r=0, t=0, b=0))
     st.plotly_chart(fig, use_container_width=True)
     st.dataframe(lt[["source", "station_id", "parameter", "value", "unit", "event_time", "tuổi (phút)"]],

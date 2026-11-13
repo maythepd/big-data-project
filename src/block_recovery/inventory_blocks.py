@@ -12,15 +12,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.common.config import LAKE
 
 DEFAULT_BLOCKS = (
     Path.home() / "hadoop_data" / "datanode" / "current"
     / "BP-431263432-127.0.1.1-1792161140699" / "current" / "finalized"
 )
-DEFAULT_LAKE = Path.home() / "openaq_lake"
 EXPECTED_COLUMNS = [
     "location_id", "sensors_id", "location", "datetime", "lat", "lon",
     "parameter", "units", "value", "value_num", "lat_num", "lon_num", "datetime_ts",
@@ -31,7 +36,7 @@ CHUNK = 8 << 20
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--blocks", default=str(DEFAULT_BLOCKS))
-    p.add_argument("--lake", default=str(DEFAULT_LAKE))
+    p.add_argument("--lake", default=str(LAKE))
     p.add_argument("--run-id", default="inventory_blocks_01")
     return p.parse_args()
 

@@ -20,9 +20,8 @@ from pymongo import GEOSPHERE, MongoClient
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.common.config import DIM_DIR, MONGO_DB, mongo_uri
+from src.common.config import DIM_DIR, LAKE, MONGO_DB, mongo_uri
 
-LAKE = Path.home() / "openaq_lake"
 REPORTS = LAKE / "reports"
 RUNS = {"silver_validation": "silver_v1_2_01_validation", "gold_hourly": "gold_v1_01",
         "gold_aqi_daily": "gold_aqi_daily_v1_01", "gold_validation": "gold_v1_01_validation",

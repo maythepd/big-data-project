@@ -35,6 +35,14 @@ services:
     container_name: producer-openweather
     command: ["python", "-m", "src.ingestion.openweather.producer"]
 
+  # replays a slice of Silver into the replay topic for the big-data experiments (src/chaos/replay.py)
+  #   docker compose -f docker-compose.producers.yml run --rm replay --run-id r1 --hours 6
+  replay:
+    <<: *producer
+    profiles: ["replay"]
+    restart: "no"
+    entrypoint: ["python", "-m", "src.chaos.replay"]
+
 networks:
   default:
     external: true

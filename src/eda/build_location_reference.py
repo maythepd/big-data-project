@@ -22,8 +22,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.eda.common import finite, read_compact, save_csv
+from src.common.config import LAKE
 
-DEFAULT_LAKE = Path.home() / "openaq_lake"
 EARTH_KM = 6371.0088
 
 
@@ -45,9 +45,9 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--input", default=str(DEFAULT_LAKE / "near_silver_compact"))
-    p.add_argument("--output", default=str(DEFAULT_LAKE / "silver" / "dim_location"))
-    p.add_argument("--report", default=str(DEFAULT_LAKE / "reports" / "location_reference_01"))
+    p.add_argument("--input", default=str(LAKE / "near_silver_compact"))
+    p.add_argument("--output", default=str(LAKE / "silver" / "dim_location"))
+    p.add_argument("--report", default=str(LAKE / "reports" / "location_reference_01"))
     p.add_argument("--mobile-km", type=float, default=1.0,
                    help="p95 distance from the reference point above which a location is mobile")
     args = p.parse_args()

@@ -21,8 +21,9 @@ if __package__ in (None, ""):
 
 from src.eda.common import read_compact
 from src.silver.rules import DEFAULT_RULES, apply_rules, dedup, finalize, load_rules
+from src.common.config import LAKE
+from src.common.failpoint import failpoint
 
-LAKE = Path.home() / "openaq_lake"
 MB = 1 << 20
 TARGET_FILE = 128 * MB
 # minimum tasks for dedup/rules; output is then reshuffled to ~128 MB files
@@ -157,6 +158,7 @@ def main():
                 silver_rows, _ = rows_in_files(target / "m")
                 q_rows, _ = rows_in_files(target / "q")
                 status = None
+                failpoint("silver.after_stage")
                 # Move into place.
                 prefix = "nullts-" if key == "null_ts" else None
                 for ydir in sorted((target / "m").glob("year=*")):
@@ -170,8 +172,11 @@ def main():
                             for old in dst.glob("*.parquet"):
                                 if not old.name.startswith("nullts-"):
                                     old.unlink()
-                        for f in mdir.glob("*.parquet"):
+                        failpoint("silver.after_delete")   # old files gone, none of the new moved in
+                        for i, f in enumerate(sorted(mdir.glob("*.parquet"))):
                             f.rename(dst / ((prefix or "") + f.name))
+                            if i == 0:
+                                failpoint("silver.mid_move")   # old files gone, one new file in place
                 qdst = quarantine_root / f"job={key}"
                 if qdst.exists():
                     shutil.rmtree(qdst)
@@ -185,6 +190,7 @@ def main():
             print(f"{key} in={rows_in} silver={silver_rows} quarantine={q_rows} dedup_removed={removed} {seconds:.0f}s", flush=True)
             if removed < 0:
                 raise RuntimeError(f"{key}: more output rows than input rows")
+            failpoint("silver.before_done")
             done.parent.mkdir(parents=True, exist_ok=True)
             done.write_text(json.dumps({"rows_in": rows_in, "silver": silver_rows, "quarantine": q_rows,
                                         "dedup_removed": removed, "status": status}), encoding="utf-8")

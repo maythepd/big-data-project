@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "openaq_reading_v2",
+  "description": "One OpenAQ measurement as the producers send it (src/common/schema.py make_openaq_message). Closed: unknown fields are invalid, so adding an optional field later stays BACKWARD-compatible.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source",
+    "station_id",
+    "location_id",
+    "sensors_id",
+    "parameter",
+    "value_raw",
+    "unit",
+    "datetime"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer"
+    },
+    "source": {
+      "type": "string"
+    },
+    "station_id": {
+      "type": "string"
+    },
+    "location_id": {
+      "type": "integer"
+    },
+    "sensors_id": {
+      "type": "integer"
+    },
+    "location_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lat": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "lon": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "parameter": {
+      "type": "string"
+    },
+    "parameter_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "value": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "value_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "unit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "units_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "datetime": {
+      "type": "string"
+    },
+    "datetime_local_raw": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ingested_at": {
+      "type": "string"
+    }
+  }
+}

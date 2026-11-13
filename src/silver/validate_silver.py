@@ -18,7 +18,10 @@ import sys
 import numpy as np
 import pyarrow.parquet as pq
 
-LAKE = Path.home() / "openaq_lake"
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from src.common.config import LAKE
 
 
 def file_keys(path):
