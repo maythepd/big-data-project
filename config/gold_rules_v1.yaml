@@ -1,5 +1,5 @@
 # Gold parameters (station x hour / day, AQI), read by src/gold/*.
-version: v1
+version: v1.1            # v1.1 adds WAQI / OpenWeather (sources)
 status: draft
 
 usable:
@@ -74,3 +74,21 @@ aqi:
 
 # Vietnam locations (dashboard / MongoDB scope): the OpenAQ station catalog of the streaming side.
 vn_locations: data/dim/openaq_locations.parquet
+
+# WAQI and OpenWeather (Vietnam only) join station_hourly at location x hour.
+# An hour keeps the first source that has it: openaq > waqi > openweather.
+sources:
+  priority: [openaq, waqi, openweather]
+  root: silver/sources                 # src/gold/source_adapters.py, relative to the lake
+  xref: gold/dim_station_xref.parquet  # src/gold/build_station_xref.py
+  waqi_match_km: 2.0
+  openweather_match_km: 1.0            # grid points this close to an OpenAQ location use it
+  # OpenWeather is model data (PM ~1.9x the OpenAQ value, gases r ~0.1, EDA 07/11/2026):
+  # only a fallback for OpenAQ sites; the grid points (virtual stations) stay out of Gold
+  openweather_virtual: false
+  # an OpenWeather hour fills only a gap of at most this many hours between two OpenAQ hours of
+  # the same location and parameter: no fill before a station starts, after it stops, for a
+  # parameter it does not measure, or in long outages (unlimited: 96% of VN Gold was model data)
+  openweather_max_gap_hours: 6
+  utc_offset_min: 420                  # Vietnam, for the local day of pass 2
+  openweather_parameters: [pm25, pm10, o3, no2, so2, co, "no"]

@@ -1,8 +1,6 @@
-"""Gold pass 2: hourly AQI and daily tables from gold/station_hourly, per month.
+"""Gold pass 2: station_hourly_aqi, station_daily and station_daily_aqi, per month.
 
-Reads each month with 2 days before and 1 after (rolling windows, local days).
-Outputs: station_hourly_aqi (NowCast, US/VN AQI), station_daily, station_daily_aqi.
-Local day = date(hour_utc + utc_offset - 1 h). Staging + move, done markers.
+Reads 2 days before and 1 after each month for rolling windows and local days.
 """
 
 import argparse
@@ -143,6 +141,8 @@ def main():
     p.add_argument("--months", nargs="+", required=True, help="YYYY-MM")
     p.add_argument("--aqi-impl", choices=["builtin", "pandas"], default="builtin")
     p.add_argument("--compare-impl", action="store_true", help="time both AQI implementations (pilot)")
+    p.add_argument("--max-rows-per-file", type=int, default=MAX_ROWS_OUTPUT_FILE,
+                   help="rows per output file; fewer rows per write task need less heap")
     args = p.parse_args()
 
     rules, silver_rules = load_gold_rules(args.rules), load_rules(args.silver_rules)
@@ -210,7 +210,7 @@ def main():
             n_hours = hw.filter(F.col("parameter").isin(*rules["aqi_parameters"])
                                 & (F.col("hour_utc") >= F.lit(start)) & (F.col("hour_utc") < F.lit(end))) \
                 .select("location_id", "hour_utc").distinct().count()
-            parts = max(1, math.ceil(n_hours / MAX_ROWS_OUTPUT_FILE))
+            parts = max(1, math.ceil(n_hours / args.max_rows_per_file))
             t1 = time.time()
             result["station_hourly_aqi"] = write_month(
                 hourly, staging / f"{key}_hourly_aqi",
@@ -232,7 +232,7 @@ def main():
                                       & (F.col("local_date") < F.lit(end.date()))).count())
             if stats["hours"] != expected_hours:
                 raise RuntimeError(f"{key}: station_daily hours {stats['hours']} != hourly rows {expected_hours}")
-            parts = max(1, math.ceil(stats["rows"] / MAX_ROWS_OUTPUT_FILE))
+            parts = max(1, math.ceil(stats["rows"] / args.max_rows_per_file))
             result["station_daily"] = write_month(
                 daily, staging / f"{key}_daily", gold / "station_daily" / f"year={start.year}" / f"month={start.month}",
                 parts, ["location_id", "parameter", "local_date"])
