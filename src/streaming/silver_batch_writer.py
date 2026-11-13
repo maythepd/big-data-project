@@ -25,6 +25,9 @@ EVENT_SCHEMA = T.StructType([
     ]
 ])
 PROVENANCE = ["raw_json", "kafka_topic", "kafka_partition", "kafka_offset", "kafka_timestamp"]
+# message versions this writer reads: 3 only adds optional fields to 2 (config/schemas, registered
+# BACKWARD-compatible in the Schema Registry), so it must not be rejected as legacy
+ACCEPTED_SCHEMA_VERSIONS = ("2", "3")
 
 
 def decode(messages):
@@ -39,7 +42,8 @@ def decode(messages):
     df = df.withColumn("envelope_reason",
         F.when(F.col("_corrupt_record").isNotNull() | F.col("source").isNull(), "malformed_message")
          .when(F.col("source") != "openaq", "unsupported_source")
-         .when(F.col("schema_version").isNull() | (F.col("schema_version") != "2"), "legacy_message")
+         .when(F.col("schema_version").isNull() | ~F.col("schema_version").isin(*ACCEPTED_SCHEMA_VERSIONS),
+               "legacy_message")
          .when(F.col("sensors_id").cast("long").isNull(), "no_sensor_id"))
     return (df.withColumn("location_id", F.col("location_id").cast("long").cast("string"))
               .withColumn("sensors_id", F.col("sensors_id").cast("long").cast("string"))
@@ -53,7 +57,10 @@ def decode(messages):
               .withColumn("lat_num", F.col("lat").cast("double"))
               .withColumn("lon_num", F.col("lon").cast("double"))
               .withColumn("location", F.col("location_name"))
-              .withColumn("source_block", F.concat_ws(":", "kafka_topic", "kafka_partition", "kafka_offset"))
+              # zero-padded so R13 dedup's tie-break (oldest source_block first) orders offsets as
+              # numbers: unpadded, "...:1000" sorted before "...:999" and a retry copy beat the original
+              .withColumn("source_block", F.format_string("%s:%d:%020d", "kafka_topic", "kafka_partition",
+                                                          "kafka_offset"))
               .withColumn("ingested_at", F.try_to_timestamp("ingested_at")))
 
 
@@ -164,6 +171,15 @@ class SilverStreamWriter:
             raise RuntimeError(f"Cannot atomically publish {target}; use one writer per root")
 
     def write_batch(self, batch, batch_id):
+        # every action below would read the micro-batch from Kafka again (5 reads per record);
+        # keep it once and release it at the end
+        batch = batch.persist(StorageLevel.MEMORY_AND_DISK)
+        try:
+            return self._write_batch(batch, batch_id)
+        finally:
+            batch.unpersist()
+
+    def _write_batch(self, batch, batch_id):
         ranges = [r.asDict() for r in batch.groupBy("topic", "partition").agg(
             F.count("*").alias("rows"), F.min("offset").alias("first_offset"),
             F.max("offset").alias("last_offset"),
@@ -217,14 +233,21 @@ class SilverStreamWriter:
             written = self.spark.read.parquet(f"{stage}/measurements")
             statuses = {r["dq_status"]: r["count"] for r in written.groupBy("dq_status").count().collect()}
             silver_rows = sum(statuses.values())
-            q_rows = self.spark.read.parquet(f"{stage}/quarantine").count()
+            staged_q = self.spark.read.parquet(f"{stage}/quarantine")
+            # what happened to the bad rows: the reason each was quarantined, the flags on kept rows
+            q_reasons = {r["quarantine_reason"]: r["count"]
+                         for r in staged_q.groupBy("quarantine_reason").count().collect()}
+            q_rows = sum(q_reasons.values())
+            flags = {r["flag"]: r["count"] for r in written.select(F.explode("dq_flags").alias("flag"))
+                     .groupBy("flag").count().collect()}
             # Conflicts count as quarantine, identical repeats as duplicates.
             removed = rows_in - silver_rows - q_rows
             report = {"batch_id": batch_id, "build_utc": build_utc, "rules_version": self.rules["version"],
                 "rules_sha256": self.rules_hash, "offset_ranges": ranges, "rows_in": rows_in,
                 "silver": silver_rows, "quarantine": q_rows, "dedup_removed": removed,
                 "cross_batch_duplicates": duplicates, "conflicts": conflicts,
-                "status_totals": statuses, "within_batch_candidates": before}
+                "status_totals": statuses, "quarantine_reasons": q_reasons, "flags": flags,
+                "within_batch_candidates": before}
             if removed < 0:
                 raise RuntimeError("Silver batch reconciliation failed")
             self.write_json(f"{stage}/report.json", report)

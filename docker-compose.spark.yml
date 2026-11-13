@@ -8,10 +8,12 @@ x-spark: &spark
   image: openaq-spark
   working_dir: /app
   environment: &spark-env
-    PYTHONPATH: /app            # lets the scripts import src.common
+    # src.* for the scripts; pyspark/py4j so plain `python3` (pytest) works without spark-submit
+    PYTHONPATH: /app:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
     HADOOP_USER_NAME: root      # the HDFS superuser in docker-compose.hdfs.yml
   volumes:
     - .:/app
+    - ivy:/tmp/.ivy2   # --packages jars (Kafka, Delta) downloaded once, not per container
 
 services:
   spark-consumer:
@@ -53,6 +55,53 @@ services:
     profiles: ["job"]
     networks:
       - hdfs
+
+  # one-off jobs on the local lake (./openaq_lake, /app/openaq_lake inside); needs no other stack
+  spark-lake:
+    <<: *spark
+    profiles: ["job"]
+
+  # the consumer under test in the big-data experiments (docs/bigdata-experiments.md): the same
+  # code on the replay topic, writing to hdfs:///replay/<run>; scripts/experiments/*.sh set REPLAY_*
+  spark-replay:
+    <<: *spark
+    profiles: ["replay"]
+    container_name: spark-replay
+    ports:
+      - "4041:4040"   # Spark UI of the run
+    environment:
+      <<: *spark-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
+      HDFS_URI: hdfs://namenode:8020
+      STREAM_TOPIC: ${REPLAY_TOPIC:-air-quality-replay}
+      STREAM_HDFS_ROOT: hdfs://namenode:8020/replay/${REPLAY_RUN:-replay}
+      STREAM_QUERIES: ${REPLAY_QUERIES:-archive,silver,deadletter}
+      STREAM_MAX_OFFSETS_PER_TRIGGER: ${REPLAY_MAX_OFFSETS:-}
+      STREAM_SHUFFLE_PARTITIONS: ${REPLAY_SHUFFLE_PARTITIONS:-4}
+      STREAM_ARCHIVE_TRIGGER: ${REPLAY_TRIGGER:-30 seconds}
+      STREAM_SILVER_TRIGGER: ${REPLAY_TRIGGER:-30 seconds}
+      STREAM_STARTING_OFFSETS: earliest
+      STREAM_RESTART_DELAY_S: "10"
+      STREAM_PROGRESS_LOG: /app/openaq_lake/replay/${REPLAY_RUN:-replay}/progress.jsonl
+      STREAM_DIM_LOCATION: file:///app/openaq_lake/silver/dim_location
+      STREAM_SENSOR_UNITS: file:///app/openaq_lake/silver/dim_sensor_unit
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - local[*]
+      - --driver-memory
+      - ${REPLAY_DRIVER_MEMORY:-3g}
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.9
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - src/streaming/consumer.py
+    networks:
+      - kafka
+      - hdfs
+
+volumes:
+  ivy:
 
 networks:
   kafka:

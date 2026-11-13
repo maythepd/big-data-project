@@ -24,8 +24,8 @@ from src.eda.common import save_csv
 from src.silver.build_silver import MAX_ROWS_COMPUTE_TASK, MIN_COMPUTE_PARTITIONS
 from src.silver.rules import (DEFAULT_RULES, SOFT_FLAGS, flatline_kind, load_rules, spike_kind,
                               with_temporal_flags)
+from src.common.config import LAKE
 
-LAKE = Path.home() / "openaq_lake"
 VN_LOCATIONS = Path(__file__).resolve().parents[2] / "data" / "dim" / "openaq_locations.parquet"
 R14 = ["spike", "flatline"]
 
@@ -86,6 +86,8 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="flags and counts only, Silver untouched")
     # ~220 MB of execution memory per task
     p.add_argument("--rows-per-task", type=int, default=500_000)
+    p.add_argument("--vn-locations", default=str(VN_LOCATIONS),
+                   help="station catalog for the Vietnam split of the report; 'none' = no split (flags unchanged)")
     args = p.parse_args()
     silver = Path(args.silver).expanduser().absolute()
     rules = load_rules(args.rules)
@@ -116,8 +118,11 @@ def main():
              .config("spark.sql.requireAllClusterKeysForCoPartition", "false")
              .getOrCreate())
     spark.sparkContext.setLogLevel("WARN")
-    vn = (spark.read.parquet(uri(VN_LOCATIONS)).select(F.col("station_id").cast("long").alias("location_id"))
-          .distinct().withColumn("vn", F.lit(True)))
+    if args.vn_locations == "none":
+        vn = spark.createDataFrame([], "location_id long, vn boolean")
+    else:
+        vn = (spark.read.parquet(uri(Path(args.vn_locations).expanduser().absolute()))
+              .select(F.col("station_id").cast("long").alias("location_id")).distinct().withColumn("vn", F.lit(True)))
     try:
         for key in keys:
             if (report / "done" / key).exists():

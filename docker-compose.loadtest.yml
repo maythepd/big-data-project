@@ -1,0 +1,27 @@
+# Locust for the fault-tolerance demo (docs/fault-tolerance-report.md, "Live demo").
+# Start Kafka first. Web UI with live charts: http://localhost:8089
+#   docker compose -f docker-compose.loadtest.yml up -d --build
+#   docker compose -f docker-compose.loadtest.yml down
+name: openaq-loadtest
+
+services:
+  locust:
+    build: docker/locust
+    image: openaq-locust
+    container_name: locust
+    working_dir: /app
+    volumes:
+      - .:/app            # the locustfile, src.common.config and .env (MONGODB_URI)
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
+      LOADTEST_TOPIC: ${LOADTEST_TOPIC:-replay-demo}
+      LOADTEST_BATCH: ${LOADTEST_BATCH:-100}
+    ports:
+      - "8089:8089"
+    # the web run: normal load only; demo.sh sends bad data in a separate headless run
+    command: ["-f", "loadtest/locustfile.py", "SensorFleet", "DashboardViewer"]
+
+networks:
+  default:
+    external: true
+    name: openaq-kafka

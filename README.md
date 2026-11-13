@@ -69,9 +69,16 @@ src/silver/                  historical Silver job and its rules
 src/gold/                    Gold job: station x hour, AQI and daily tables
 src/serving/                 Gold Parquet to the MongoDB serving collections
 src/dashboard/               Streamlit dashboard
+src/dashboard/robustness.py  robustness lab UI: simulated problems, defences, results (port 8502, no MongoDB)
+src/chaos/                   fault injection on Near-Silver and its evaluation (docs/fault-injection.md)
 config/                      Silver and Gold rule parameters
-tests/                       pytest suite for the Gold and AQI logic
+tests/                       pytest suite for the Gold, AQI and fault-injection logic
 scripts/stack.sh             starts and stops the Docker stacks in order
+scripts/chaos_batch.sh       one chaos run: inject, Silver, R14, evaluate (in the Spark container)
+scripts/experiments/          big-data experiments: velocity, exactly-once, memory, reprocessing, schema
+docs/                        fault-tolerance report, fault injection, big-data experiments
+loadtest/locustfile.py       Locust load for the live fault-tolerance demo (docker-compose.loadtest.yml)
+openaq_lake/                 local data lake: Near-Silver, Silver, Gold, reports, chaos runs (git-ignored)
 prepare_shard.ipynb          splits the archive manifest into 30 shards for Kaggle
 kaggle_crawl.ipynb           downloads one shard in a Kaggle session
 ```
@@ -89,6 +96,8 @@ kaggle_crawl.ipynb           downloads one shard in a Kaggle session
 | `MONGO_PASSWORD` | the MongoDB container, the streaming consumer and `load_mongo.py` |
 | `KAFKA_BOOTSTRAP_SERVERS` (optional) | defaults to all 3 brokers, `localhost:9092,localhost:9094,localhost:9096`; leave it unset unless that changes |
 | `MONGO_HOST` (optional) | defaults to `localhost` |
+| `MONGODB_URI` (optional) | full connection string, for example MongoDB Atlas (`mongodb+srv://...`); when set, the consumer, loaders and dashboard use it instead of the local container |
+| `LAKE_DIR` (optional) | the local data lake used by the Silver, Gold, serving and chaos jobs; defaults to `openaq_lake/` in this folder |
 
 All commands below run from the project root.
 
@@ -177,12 +186,19 @@ All commands below run from the project root.
 
 `tests/` checks the Gold logic on small Spark fixtures: US EPA and VN_AQI breakpoints, unit
 conversion and truncation, NowCast, the SO2 and VN PM rules, rolling means, local days and the
-18-of-24-hours rule. Expected values are worked by hand from the published tables. They need
-Java 8, 11 or 17 (Spark 3.5 does not run on newer Java) and take about 4 minutes:
+18-of-24-hours rule. Expected values are worked by hand from the published tables. `test_chaos.py`
+checks the fault catalogue and which Silver rules catch which fault. They need Java 8, 11 or 17
+(Spark 3.5 does not run on newer Java) and take a few minutes:
 
 ```
 pip install -r requirements-dev.txt
 python -m pytest tests
+```
+
+Without Java on the host, run them in the Spark image:
+
+```
+docker compose -f docker-compose.spark.yml run --rm spark-lake python3 -m pytest tests
 ```
 
 ## Components

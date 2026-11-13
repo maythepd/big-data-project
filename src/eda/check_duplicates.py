@@ -23,8 +23,8 @@ if __package__ in (None, ""):
 
 from src.eda.common import count_if, read_compact, save_csv
 from src.eda.quality_flags import repaired_datetime
+from src.common.config import LAKE
 
-DEFAULT_LAKE = Path.home() / "openaq_lake"
 SPIKE_MONTHS = [(2023, 9), (2023, 10), (2023, 11), (2024, 2), (2024, 3), (2024, 4)]
 
 
@@ -87,8 +87,8 @@ def sensor_month(df):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--input", default=str(DEFAULT_LAKE / "near_silver_compact"))
-    p.add_argument("--report", default=str(DEFAULT_LAKE / "reports" / "duplicates_full_01"))
+    p.add_argument("--input", default=str(LAKE / "near_silver_compact"))
+    p.add_argument("--report", default=str(LAKE / "reports" / "duplicates_full_01"))
     p.add_argument("--months", nargs="*", help="YYYY-MM and/or null_ts (pilot)")
     args = p.parse_args()
     source = Path(args.input).expanduser().absolute()
@@ -163,8 +163,8 @@ def main():
             F.min("parameter_min").alias("parameter_min"), F.max("parameter_max").alias("parameter_max"),
             F.min("units_min").alias("units_min"), F.max("units_max").alias("units_max"),
         )
-        sensor.write.mode("overwrite").parquet(uri(DEFAULT_LAKE / "silver" / "dim_sensor"))
-        sensor = spark.read.parquet(uri(DEFAULT_LAKE / "silver" / "dim_sensor"))
+        sensor.write.mode("overwrite").parquet(uri(LAKE / "silver" / "dim_sensor"))
+        sensor = spark.read.parquet(uri(LAKE / "silver" / "dim_sensor"))
         save_csv(sensor.agg(
             F.count("*").alias("sensors"),
             count_if(F.col("parameter_min") != F.col("parameter_max"), "sensors_multi_parameter"),

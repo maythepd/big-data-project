@@ -18,8 +18,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.silver.rules import DEFAULT_RULES, load_rules
+from src.common.config import LAKE
 
-LAKE = Path.home() / "openaq_lake"
 
 
 def decide(sensors, rules):

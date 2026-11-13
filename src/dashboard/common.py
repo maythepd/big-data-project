@@ -32,6 +32,11 @@ NO_DATA = ("Không đủ dữ liệu", "#9e9e9e")
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 NEUTRAL = "#4a6fa5"
 GRID = "rgba(128,128,128,0.2)"
+# base map for the station maps: Esri raster tiles, free and keyless (OpenStreetMap's tile servers
+# are unreachable from some networks, Carto now asks for an API key)
+BASEMAP_LAYERS = [dict(below="traces", sourcetype="raster", sourceattribution="Tiles © Esri",
+                       source=["https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/"
+                               "World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"])]
 
 
 def band(aqi, std):

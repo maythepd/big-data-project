@@ -18,8 +18,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.eda.common import count_if, save_csv
+from src.common.config import LAKE
 
-LAKE = Path.home() / "openaq_lake"
 VN_LOCATIONS = Path(__file__).resolve().parents[2] / "data" / "dim" / "openaq_locations.parquet"
 DURATION_EDGES_H = [1, 3, 6, 12, 24, 48, 168]
 RATIO_EDGES = [2, 3, 5, 10]
