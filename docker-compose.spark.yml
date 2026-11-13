@@ -28,8 +28,8 @@ services:
       MONGO_HOST: mongo           # MONGO_PASSWORD is read from the mounted .env
       HDFS_URI: ${HDFS_URI:-hdfs://namenode:8020}
       # one root per rules version (v1_2); a rules change needs a new root and checkpoint
-      STREAM_SILVER_ROOT: hdfs://namenode:8020/openaq/silver/stream/v1_2
-      STREAM_SILVER_CHECKPOINT: hdfs://namenode:8020/openaq/checkpoints/silver_stream_v1_2
+      STREAM_SILVER_ROOT: ${STREAM_SILVER_ROOT:-hdfs://namenode:8020/openaq/silver/stream/v1_2}
+      STREAM_SILVER_CHECKPOINT: ${STREAM_SILVER_CHECKPOINT:-hdfs://namenode:8020/openaq/checkpoints/silver_stream_v1_2}
       # Kafka start for a new checkpoint: earliest | latest | JSON (src.streaming.checkpoint_offsets)
       STREAM_STARTING_OFFSETS: ${STREAM_STARTING_OFFSETS:-earliest}
       STREAM_STARTING_OFFSETS_ARCHIVE: ${STREAM_STARTING_OFFSETS_ARCHIVE:-}

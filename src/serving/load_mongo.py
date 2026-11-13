@@ -1,10 +1,4 @@
-"""Load Gold into MongoDB time series collections, one (collection, month) per task.
-
-Collections: station_hourly, station_aqi_hourly, station_daily, station_daily_aqi (VN scope,
-plus global daily for the AQI pollutants), stations; station_hourly_global on request.
-Each month's time range is deleted then inserted, with a done marker, so reruns resume.
---bench YYYY-MM measures one global month and a regular vs time series collection.
-"""
+"""Load Gold into MongoDB time series collections, one (collection, month) per task; reruns resume."""
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -154,19 +148,26 @@ def to_documents(batch, spec):
     return docs
 
 
-def load_month(name, key, path, run_dir, collection=None, where=True):
-    """Delete the month's time range, insert its rows. Runs in a worker process."""
+def load_month(name, key, path, run_dir, collection=None, where=True, vn_only=False):
+    """Replace one month of a collection (only its Vietnam documents with vn_only)."""
     spec = SPECS[name]
     target = collection or name
     t0 = time.time()
     db = connect()[MONGO_DB]
     coll = db[target]
     start, end = month_range(key)
-    deleted = coll.delete_many({spec["time"][1]: {"$gte": start, "$lt": end}}).deleted_count
+    vn_only = vn_only and "is_vn" in spec["meta"]
+    query = {spec["time"][1]: {"$gte": start, "$lt": end}}
+    row_filter = spec["where"]() if where and spec["where"] else None
+    if vn_only:
+        query["meta.is_vn"] = True
+        vn = ds.field("is_vn") == True                                 # noqa: E712
+        row_filter = vn if row_filter is None else row_filter & vn
+    deleted = coll.delete_many(query).deleted_count
     dataset = ds.dataset(str(path), format="parquet")
     columns = list(dict.fromkeys(spec["meta"] + spec["fields"] + [spec["time"][0]]))
     # no read-ahead: the defaults buffer whole files per worker and exhaust memory
-    scanner = dataset.scanner(columns=columns, filter=spec["where"]() if where and spec["where"] else None,
+    scanner = dataset.scanner(columns=columns, filter=row_filter,
                               batch_size=BATCH_ROWS, use_threads=False,
                               batch_readahead=0, fragment_readahead=0)
     rows = 0
@@ -177,7 +178,7 @@ def load_month(name, key, path, run_dir, collection=None, where=True):
         coll.insert_many(docs, ordered=False)
         rows += len(docs)
     result = {"collection": target, "month": key, "rows": rows, "deleted_before": deleted,
-              "seconds": round(time.time() - t0, 1)}
+              "vn_only": vn_only, "seconds": round(time.time() - t0, 1)}
     if run_dir is not None:
         (run_dir / "done" / f"{target}__{key}").write_text(json.dumps(result), encoding="utf-8")
     return result
@@ -279,6 +280,8 @@ def main():
     p.add_argument("--collections", nargs="+", default=DEFAULT_COLLECTIONS, choices=list(SPECS))
     p.add_argument("--months", nargs="*", help="YYYY-MM (default: every Gold month)")
     p.add_argument("--workers", type=int, default=3)
+    p.add_argument("--vn-only-months", nargs="*", default=[],
+                   help="YYYY-MM whose non-VN documents are unchanged: replace only the VN ones")
     p.add_argument("--drop", action="store_true", help="drop and recreate the collections first")
     p.add_argument("--bench", metavar="YYYY-MM", help="measured global hourly load of one month")
     p.add_argument("--keep-bench", action="store_true")
@@ -308,7 +311,7 @@ def main():
                 if args.months and key not in args.months:
                     continue
                 if not (report / "done" / f"{name}__{key}").exists():
-                    tasks.append((name, key, path, report))
+                    tasks.append((name, key, path, report, None, True, key in args.vn_only_months))
         meta["tasks"] = len(tasks)
         t0 = time.time()
         with (report / "load_log.jsonl").open("a", encoding="utf-8") as log:
@@ -320,7 +323,7 @@ def main():
             checks[name] = dict(stats=stats)
             if not args.months:
                 exp = expected_rows(name)
-                if name in COUNT_FROM_MARKERS:
+                if name in COUNT_FROM_MARKERS and not args.vn_only_months:
                     got = sum(json.loads(f.read_text())["rows"] for f in (report / "done").glob(f"{name}__*"))
                     checks[name]["count_method"] = "sum of done markers"
                 else:

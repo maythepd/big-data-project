@@ -1,8 +1,4 @@
-"""Validate gold/station_hourly per month against an independent recount of Silver.
-
-Checks keys, units, time range, min <= mean <= max and sum(n_readings) = usable Silver rows.
-Output: reports/<run-id>/checks.json.
-"""
+"""Check gold/station_hourly per month against a recount of Silver -> reports/<run-id>/checks.json."""
 
 import argparse
 from datetime import datetime, timezone
@@ -50,7 +46,8 @@ def main():
                 F.count(F.when((F.col("value_mean") < F.col("value_min") - TOLERANCE)
                                | (F.col("value_mean") > F.col("value_max") + TOLERANCE), 1)).alias("mean_outside_min_max"),
                 F.count(F.when(F.col("value_mean").isNull(), 1)).alias("null_mean"),
-                F.sum("n_readings").alias("n_readings"),
+                F.sum(F.when(~F.col("origin").isin("waqi", "openweather"), F.col("n_readings"))).alias("n_readings"),
+                F.count(F.when(F.col("origin").isin("waqi", "openweather"), 1)).alias("source_rows"),
                 F.count(F.when(F.col("lat").isNull(), 1)).alias("rows_without_coords"),
                 F.countDistinct(F.when(F.col("lat").isNull(), F.col("location_id"))).alias("locations_without_coords"),
                 F.count(F.when(F.col("is_vn"), 1)).alias("vn_rows"),

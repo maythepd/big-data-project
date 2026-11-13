@@ -1,0 +1,2 @@
+# keep LF on every OS: the streaming Silver contract hashes the rule file bytes
+config/*.yaml text eol=lf
