@@ -4,6 +4,7 @@
 # generated data
 data/
 openaq_lake/
+openaq_lake_hist/
 
 # python
 __pycache__/

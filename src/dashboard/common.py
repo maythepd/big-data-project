@@ -180,3 +180,20 @@ def coll_sizes():
 @st.cache_data(ttl=30, show_spinner=False)
 def latest():
     return pd.DataFrame(list(db().latest_readings.find({}, {"_id": 0}).sort("event_time", -1).limit(500)))
+
+
+# ------------------------------------------------------------------ models (src/ml, src/serving/load_ml.py)
+@st.cache_data(ttl=600, show_spinner=False)
+def ml_metrics():
+    """{"run": run info, "vn": metrics, "us": metrics}, empty before the first load."""
+    return {d["_id"]: d for d in db().ml_metrics.find({})}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def ml_frame(name, std):
+    """One standard's rows of an ml_* collection; times converted to Vietnam time."""
+    df = pd.DataFrame(list(db()[name].find({"std": std}, {"_id": 0})))
+    for c in ("issued_utc", "target_utc", "hour_utc"):
+        if c in df:
+            df[c.replace("_utc", "_vn")] = pd.to_datetime(df[c]).dt.tz_localize(None) + VN_OFFSET
+    return df

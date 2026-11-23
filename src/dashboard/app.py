@@ -10,7 +10,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.dashboard import common  # noqa: E402
-from src.dashboard.views import compare, live, overview, pipeline, standards, trends, world  # noqa: E402
+from src.dashboard.views import compare, forecast, live, overview, pipeline, standards, trends, world  # noqa: E402
 
 st.set_page_config(page_title="Chất lượng không khí Việt Nam", layout="wide")
 
@@ -31,7 +31,9 @@ nav = st.navigation({
     "Việt Nam": [st.Page(overview.render, title="Tổng quan", icon=":material/map:", default=True),
                  st.Page(trends.render, title="Xu hướng & mùa vụ", icon=":material/trending_up:", url_path="xu-huong"),
                  st.Page(compare.render, title="So sánh trạm", icon=":material/compare_arrows:", url_path="so-sanh"),
-                 st.Page(standards.render, title="Chuẩn VN và US", icon=":material/balance:", url_path="chuan-aqi")],
+                 st.Page(standards.render, title="Chuẩn VN và US", icon=":material/balance:", url_path="chuan-aqi"),
+                 st.Page(forecast.render, title="Dự báo & cảnh báo", icon=":material/online_prediction:",
+                         url_path="du-bao")],
     "Mở rộng": [st.Page(world.render, title="Toàn cầu", icon=":material/public:", url_path="toan-cau"),
                 st.Page(live.render, title="Trực tiếp", icon=":material/sensors:", url_path="truc-tiep"),
                 st.Page(pipeline.render, title="Dữ liệu & pipeline", icon=":material/database:", url_path="pipeline")],

@@ -1,0 +1,28 @@
+# Autoscaling experiment (docs/fault-tolerance-report.md, "Autoscaling"): the stream validator
+# (src/streaming/validator.py) as a Kafka consumer group that src/streaming/autoscaler.py scales
+# between 1 and N replicas by consumer lag. Start Kafka first; scripts/experiments/autoscale.sh runs it all.
+#   docker compose -f docker-compose.autoscale.yml up -d --scale validator=1
+name: openaq-autoscale
+
+services:
+  validator:
+    build: docker/producer          # kafka-python + jsonschema
+    image: openaq-producer
+    # no container_name: compose names the replicas openaq-autoscale-validator-1, -2, ...
+    working_dir: /app
+    init: true                      # passes docker stop's SIGTERM to Python: finish, commit, leave the group
+    stop_grace_period: 30s
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka1:29092,kafka2:29092,kafka3:29092
+    volumes:
+      - .:/app
+    command: ["python", "-m", "src.streaming.validator", "--in", "${AUTOSCALE_IN:-autoscale-in}",
+              "--out", "${AUTOSCALE_OUT:-autoscale-valid}", "--dlq", "${AUTOSCALE_DLQ:-autoscale-dlq}"]
+
+networks:
+  default:
+    external: true
+    name: openaq-kafka

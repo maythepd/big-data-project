@@ -67,6 +67,7 @@ src/block_recovery/          Near-Silver recovered from HDFS DataNode blocks
 src/eda/                     data-quality checks behind the cleaning rules
 src/silver/                  historical Silver job and its rules
 src/gold/                    Gold job: station x hour, AQI and daily tables
+src/ml/                      AQI forecast and early warning: Spark MLlib, plus XGBoost and LSTM to compare (docs/forecasting.md)
 src/serving/                 Gold Parquet to the MongoDB serving collections
 src/dashboard/               Streamlit dashboard
 src/dashboard/robustness.py  robustness lab UI: simulated problems, defences, results (port 8502, no MongoDB)
@@ -76,9 +77,12 @@ tests/                       pytest suite for the Gold, AQI and fault-injection 
 scripts/stack.sh             starts and stops the Docker stacks in order
 scripts/chaos_batch.sh       one chaos run: inject, Silver, R14, evaluate (in the Spark container)
 scripts/experiments/          big-data experiments: velocity, exactly-once, memory, reprocessing, schema
-docs/                        fault-tolerance report, fault injection, big-data experiments
+scripts/history_pipeline.sh  2024-2025 lake from the Hugging Face Near-Silver (VN + 5% of the world) and the models
+docs/                        fault-tolerance report, fault injection, big-data experiments, forecasting
 loadtest/locustfile.py       Locust load for the live fault-tolerance demo (docker-compose.loadtest.yml)
+docker-compose.autoscale.yml stream validator replicas, scaled by Kafka lag (src/streaming/autoscaler.py)
 openaq_lake/                 local data lake: Near-Silver, Silver, Gold, reports, chaos runs (git-ignored)
+openaq_lake_hist/            the 2024-2025 history lake for the forecast models (git-ignored)
 prepare_shard.ipynb          splits the archive manifest into 30 shards for Kaggle
 kaggle_crawl.ipynb           downloads one shard in a Kaggle session
 ```

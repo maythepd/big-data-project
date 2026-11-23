@@ -7,10 +7,13 @@ work: [fault-injection.md](fault-injection.md) (data faults) and
 
 ## Summary
 
-The pipeline kept running through every failure we injected, and every check we have finished
-counted zero lost and zero duplicated rows. The streaming run with two consumer kills, a broker
-outage and a DataNode outage read all 606,080 messages back; its row-by-row reconciliation is
-still to run.
+The pipeline kept running through every failure we injected, and every finished check counted
+zero lost and zero duplicated rows:
+- The streaming run with two consumer kills, a broker outage and a DataNode outage was reconciled
+  message by message: all 606,080 messages are accounted for, and Silver holds exactly 600,000
+  rows with no duplicates.
+- The autoscaled validators went from 1 to 3 replicas and back under a 1M-message burst, and
+  every one of 1.4M messages came out exactly once.
 
 - **Survives:** a consumer `kill -9` (twice), one Kafka broker down, one HDFS DataNode down,
   producer retries (1% of messages sent twice), a month rebuild that crashes (the rerun restores
@@ -20,6 +23,9 @@ still to run.
   moving files leaves readers a quarter of a month until the rerun; the Delta quality gate let a
   bad rebuild through because its threshold was too loose (fixed since: a per-flag check now
   catches it).
+- **Autoscaling:** scaling on Kafka lag alone (KEDA's rule) removed a replica mid-burst and the
+  lag came back (1,332 to 24,700 messages in 10 s). Adding the incoming rate to the rule fixed it
+  (see [Autoscaling](#autoscaling)).
 - **Fixed on the way:** 8 defects the tests exposed (table below), among them the streaming Silver
   reading every Kafka record 5 times and a dedup tie-break that compared offsets as text.
 
@@ -93,8 +99,15 @@ proposed rules R15–R20: [fault-injection.md](fault-injection.md).
 - The producer had **0 failed sends** of 606,080, through the broker outage.
 - The archive and Silver queries **read all 606,080 messages** and ended 0 offsets behind.
 - Silver's slowest micro-batch took 37 s (normal: about 11 s), while the restarted consumer caught up.
-- **Pending:** the per-message count of lost and duplicated rows. The first reconciliation crashed
-  on an empty dead-letter store (a bug since fixed); it needs one rerun.
+- **Per-message reconciliation (rerun on 23 November 2026): 0 lost, 0 stored twice.**
+  - Of the 606,080 messages, 600,000 are distinct readings and 6,080 are producer retry copies.
+  - Every one of the 606,080 is in the archive.
+  - Silver holds exactly 600,000 rows with no duplicate key. Each retry copy was deduplicated,
+    with one row kept per reading.
+  - So two consumer `kill -9`s, a broker outage and a DataNode outage cost nothing.
+  - The archive holds 599,605 rows, not 600,000. Its key is (station, parameter, time): 395 pairs
+    of sensors at the same station and time share a key. Nothing is missing. Silver's key
+    includes the sensor.
 
 In a 20,215-message test with 1% retries, reconciliation found every message: 0 lost, every retry
 copy deduplicated with one row kept per key.
@@ -117,7 +130,17 @@ copy deduplicated with one row kept per key.
 0 keys stored twice in the archive or in Silver. With the contract (JSON Schemas in a Confluent
 Schema Registry, BACKWARD compatibility, checked at the producer), 10,100 messages that break it
 were sent to a dead-letter topic instead of the main topic; the registry accepted v3 as a new
-version and refused the renamed schema. The per-variant reconciliation of that run is pending.
+version and refused the renamed schema.
+
+The reconciliation of the contract run (rerun on 23 November 2026):
+- **Refused at the producer, before Kafka: 10,100 messages, every bad variant.** Missing keys
+  2,039; legacy v1 1,991; the renamed field 1,981 (the registry refused the schema); the value as
+  text 1,974; cut-off JSON 2,019; oversized 96.
+- **Accepted: 89,900 messages.** That is 87,916 current-format and 1,984 additive v3 messages.
+  All of them are in the archive, Silver holds exactly 89,900 rows, and no key is stored twice.
+- With the contract, nothing malformed reaches the stream. Silver's own rules still flag the
+  values that are well formed but wrong: 1.3% invalid and 2.7% suspect. The failure run, with
+  clean v2 messages only, has nearly the same shares (1.4% and 2.7%).
 
 ### Memory pressure
 
@@ -185,6 +208,79 @@ catch-up test are pending.
 | The same input computed three times | a DataFrame reused by three actions is rebuilt each time | persisted once |
 | Readers see a broken month after a crash | delete and move are separate steps | measured; Delta Lake commits atomically |
 
+## Autoscaling
+
+The stream validator scales itself with the load: a Kafka consumer group whose replica count
+follows the consumer lag, the same rule KEDA's Kafka scaler applies on Kubernetes.
+
+- **What scales:** `src/streaming/validator.py` checks every incoming message against its contract
+  (`config/schemas`, by `schema_version`) and forwards it to a clean topic or a dead-letter topic.
+  It is stateless, so any number of replicas can share the work: Kafka splits the topic's 12
+  partitions between them and rebalances when one joins or leaves.
+- **When:** `src/streaming/autoscaler.py` reads the group's lag and the incoming rate every 10 s.
+  It wants the larger of two counts: `ceil(lag / 20,000)` replicas to drain the backlog (KEDA's
+  rule), and `ceil(incoming msg/s / 4,000)` replicas to keep up with the incoming rate. The count
+  stays between 1 and 6, and never above the partition count. It scales out at once, and scales in
+  only after the lower count has been enough for 60 s.
+- **How:** `docker compose up --scale validator=N` (`docker-compose.autoscale.yml`). On a cluster the
+  same validator would run as a Kubernetes Deployment scaled by KEDA.
+- **Without losing data:** a replica commits its input offsets only after its output is
+  acknowledged, and on scale-in (SIGTERM) it finishes its batch, commits and leaves the group.
+  A replica killed mid-batch loses nothing; the partition's next owner processes the uncommitted
+  messages again (at least once, counted as `redelivered`).
+
+`scripts/experiments/autoscale.sh` runs it: steady Locust load (sensor fleets and a broken feed),
+then a burst of 1,000,000 real readings as after an outage, then idle. It prints the autoscaler's
+decisions live and counts every message at the end: in = valid + dead letter (+ redelivered).
+
+### Results (23 November 2026)
+
+The load came in three phases:
+- **Steady:** 30 Locust users sending about 2,200 msg/s, for 180 s.
+- **Burst:** 1,000,000 readings sent at 9,000–10,800 msg/s.
+- **Idle.**
+
+| | Run 3: lag only (KEDA's rule) | Run 4: lag and rate |
+|---|---|---|
+| Messages in | 1,395,388 | 1,395,389 |
+| Valid + dead letter | 1,374,648 + 20,740 | 1,374,655 + 20,734 |
+| Lost / redelivered | **0 / 0** | **0 / 0** |
+| Scale events | 1 → 3 → 2 (mid-burst) → 1 | 1 → 3 → 2 (burst slowing) → 1 |
+| Peak lag | 58,888 | 56,093 |
+| Lag after the first drain, during the burst | back up to **24,700** after the scale-in | stayed under **4,908** |
+| Peak throughput | 14,301 msg/s with 3 replicas | 13,729 msg/s with 3 replicas |
+
+**Scale-out works in both runs.** The burst pushed lag to about 57,000 within 10 s. One replica
+was processing 4,200 msg/s against 10,000 arriving, so the autoscaler started 2 more. Three
+replicas drained the backlog in about 30 s.
+
+**The weakness found:** with lag as the only signal, the autoscaler scaled in while the load was
+still high.
+- Once the 3 replicas had caught up, lag fell to about 1,300, so the lag rule asked for 1 replica.
+- After the 60 s window it removed one replica, although 10,700 msg/s were still arriving.
+- 10 s later, lag was back at 24,700, because 2 replicas processed only 8,000 msg/s.
+- Only the end of the burst stopped it from flapping.
+
+Low lag means the replicas are keeping up, not that the load has gone. KEDA's Kafka lag scaler
+has the same blind spot.
+
+**The fix:** also count the replicas the incoming rate needs, at the 4,000 msg/s one replica
+sustains (measured: 1 replica at 4,200 msg/s, 3 replicas at up to 14,300). With it, run 4 kept 3
+replicas until the burst slowed, then scaled in step by step as the load fell. The rule is
+unit tested in `tests/test_autoscale.py`, with the run 3 numbers.
+
+**No data lost while scaling.** In both runs, every message that came in went out exactly once,
+either valid or dead letter. Messages were neither lost nor processed twice: each replica
+commits only after its output is acknowledged, and leaves the group cleanly on SIGTERM.
+
+The dead letters (1.5%) are the replay's 1% bad-schema and 1% malformed variants, plus
+Locust's bad-data sender.
+
+**Two bugs found while running it:**
+- kafka-python 3 renamed the call that reads a group's offsets.
+- The lag read fails with `NotCoordinatorError` while a new consumer group forms. The
+  autoscaler now skips that check instead of crashing, and never scales on a failed reading.
+
 ## Live demo
 
 Two scripts show each kind of fault happening and the pipeline handling it, live, with Enter
@@ -244,8 +340,6 @@ that limit.
 
 ## Open items
 
-- Rerun the reconciliation of the failure run and the schema contract run (counts of lost and
-  duplicated messages).
 - Run the throughput steps above 2,000 msg/s and the backlog catch-up, with and without
   `maxOffsetsPerTrigger`, and the 1 GB streaming consumer.
 - Rerun the full-month Delta step of the reprocessing experiment with the new per-flag gate.
